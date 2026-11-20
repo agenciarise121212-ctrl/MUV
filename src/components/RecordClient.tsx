@@ -10,6 +10,17 @@ import { getSport } from "@/lib/sports";
 import { limitFor, familyOf, FAMILY_LABEL } from "@/lib/anticheat";
 import MapCanvas from "./MapCanvas";
 import { Icon, SportIcon } from "@/components/icons.client";
+import {
+  PocketMode,
+  useWakeLock,
+  activeSessionKey,
+  clearActiveSession,
+  saveRecordingState,
+  loadRecordingState,
+  dropRecordingState,
+} from "@/components/PocketMode";
+import { useRoutePhotos } from "@/lib/route-photos";
+import { MAX_PHOTOS_PER_ACTIVITY, formatBytes } from "@/lib/image";
 
 type Phase = "ready" | "recording" | "paused" | "saving" | "error";
 
@@ -79,14 +90,44 @@ export function RecordClient({
   const stillSinceRef = useRef<number | null>(null);
   const movingSinceRef = useRef<number | null>(null);
   const watchRef = useRef<number | null>(null);
-  const wakeRef = useRef<{ release: () => Promise<void> } | null>(null);
   const startedAtRef = useRef<number | null>(null);
   const pausedAtRef = useRef<number | null>(null);
   const phaseRef = useRef<Phase>("ready");
+  // Recuperação: chave estável do treino ativo (sobrevive a recarregamento).
+  // `useState` com inicializador que toca `window` quebra a renderização no
+  // servidor — por isso a chave é resolvida depois da montagem.
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [resumed, setResumed] = useState(false);
+  const [pocket, setPocket] = useState(false);
 
   useEffect(() => {
     phaseRef.current = phase;
   }, [phase]);
+
+  useEffect(() => {
+    setSessionId(activeSessionKey());
+  }, []);
+
+  // RECUPERAÇÃO AUTOMÁTICA: se o navegador recarregou no meio do percurso,
+  // retomamos os pontos, a distância e o tempo de onde pararam.
+  useEffect(() => {
+    const saved = loadRecordingState();
+    if (!saved || saved.sportKey !== sportKey) return;
+    pointsRef.current = saved.points as TrackPoint[];
+    distanceRef.current = saved.distanceM;
+    movingRef.current = saved.movingSec;
+    gainRef.current = saved.gainM;
+    lossRef.current = saved.lossM;
+    maxSpeedRef.current = saved.maxSpeedKmh;
+    pausesRef.current = saved.pauses;
+    autoPausesRef.current = saved.autoPauses;
+    startedAtRef.current = saved.startedAt;
+    elapsedRef.current = (Date.now() - saved.startedAt) / 1000;
+    phaseRef.current = "recording";
+    setPhase("recording");
+    setResumed(true);
+    window.setTimeout(() => setResumed(false), 6000);
+  }, [sportKey]);
 
   const gpsQuality = useMemo(() => {
     if (!hasSignal || accuracy === 0) return { label: "Aguardando GPS", tone: "#8a97a8" };
@@ -95,6 +136,16 @@ export function RecordClient({
     if (accuracy <= 30) return { label: "GPS regular", tone: "#ffd43b" };
     return { label: "GPS fraco", tone: "#ff7a3d" };
   }, [hasSignal, accuracy]);
+
+  // Diário de rota: fotos cravadas no trajeto com GPS, km e horário.
+  const routePhotos = useRoutePhotos({
+    sessionId: sessionId ?? "pending",
+    pointsRef,
+    distanceRef,
+    elapsedMs: () => (startedAtRef.current ? Date.now() - startedAtRef.current : 0),
+    accuracy,
+  });
+  const cameraInputRef = useRef<HTMLInputElement | null>(null);
 
   const handlePosition = useCallback(
     (pos: GeolocationPosition) => {
@@ -206,25 +257,9 @@ export function RecordClient({
     }
   }, []);
 
-  const requestWakeLock = useCallback(async () => {
-    const nav = navigator as Navigator & {
-      wakeLock?: { request: (type: "screen") => Promise<{ release: () => Promise<void> }> };
-    };
-    try {
-      if (nav.wakeLock) wakeRef.current = await nav.wakeLock.request("screen");
-    } catch {
-      /* dispositivo sem suporte */
-    }
-  }, []);
-
-  const releaseWakeLock = useCallback(async () => {
-    try {
-      await wakeRef.current?.release();
-    } catch {
-      /* noop */
-    }
-    wakeRef.current = null;
-  }, []);
+  // Wake Lock: mantém a tela ligada para o sistema não suspender o GPS.
+  const isRecordingPhase = phase === "recording" || phase === "paused";
+  const wakeLock = useWakeLock(isRecordingPhase);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -257,11 +292,28 @@ export function RecordClient({
     if (stats.currentSpeed > stats.maxSpeed) maxSpeedRef.current = stats.currentSpeed;
   }, [stats.currentSpeed, stats.maxSpeed]);
 
+  // Persistência contínua: a cada ciclo do cronômetro salvamos o estado,
+  // para que bloquear o celular ou recarregar não perca o trajeto.
+  useEffect(() => {
+    if (phase !== "recording" && phase !== "paused") return;
+    saveRecordingState({
+      sportKey,
+      startedAt: startedAtRef.current ?? Date.now(),
+      points: pointsRef.current,
+      distanceM: distanceRef.current,
+      movingSec: movingRef.current,
+      gainM: gainRef.current,
+      lossM: lossRef.current,
+      maxSpeedKmh: maxSpeedRef.current,
+      pauses: pausesRef.current,
+      autoPauses: autoPausesRef.current,
+    });
+  }, [stats, phase, sportKey]);
+
   useEffect(() => {
     startGps();
     return () => {
       stopGps();
-      void releaseWakeLock();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -271,7 +323,6 @@ export function RecordClient({
     pausedAtRef.current = null;
     phaseRef.current = "recording";
     setPhase("recording");
-    await requestWakeLock();
   }
 
   function pause(manual: boolean) {
@@ -302,7 +353,6 @@ export function RecordClient({
     }
     setPhase("saving");
     stopGps();
-    await releaseWakeLock();
     const elapsedSec = Math.round(
       Math.max(1, elapsedRef.current + (pausedAtRef.current ? (Date.now() - pausedAtRef.current) / 1000 : 0)),
     );
@@ -343,6 +393,32 @@ export function RecordClient({
       if (json.integrity && json.integrity.status !== "valid" && json.integrity.reason) {
         sessionStorage.setItem(`muv-integrity-${json.id}`, json.integrity.reason);
       }
+
+      // Envia as fotos do diário de rota com suas geotags.
+      const pending = routePhotos.photos.filter((p) => !p.uploaded);
+      if (pending.length > 0 && json.id) {
+        try {
+          await fetch(`/api/activities/${json.id}/photos`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              photos: pending.map((p) => ({
+                dataUrl: p.dataUrl,
+                caption: p.caption,
+                lat: p.lat,
+                lng: p.lng,
+                kmMark: p.kmMark,
+                altitudeM: p.altitudeM,
+                elapsedAtMs: p.elapsedAtMs,
+              })),
+            }),
+          });
+        } catch {
+          // Falha de rede: as fotos permanecem no dispositivo e podem ser reenviadas.
+        }
+      }
+      clearActiveSession();
+      routePhotos.clearSession();
       router.push(`/app/activities/${json.id}/save`);
     } catch (error) {
       setPhase("error");
@@ -377,11 +453,78 @@ export function RecordClient({
             </p>
           </div>
         </div>
-        <div className="metric flex size-10 flex-col items-center justify-center border border-line text-[11px] font-bold leading-none">
-          {stats.points}
-          <span className="mt-0.5 text-[8px] font-semibold text-muted">PTS</span>
+        <div className="flex items-center gap-2">
+          {phase === "recording" || phase === "paused" ? (
+            <>
+              <button
+                type="button"
+                onClick={() => setPocket(true)}
+                className="tap"
+                aria-label="Modo bolso"
+                title="Modo bolso: tela preta, sem toques acidentais"
+              >
+                <Icon.lock className="size-[18px]" />
+              </button>
+              <button
+                type="button"
+                onClick={() => cameraInputRef.current?.click()}
+                disabled={routePhotos.busy || routePhotos.photos.length >= MAX_PHOTOS_PER_ACTIVITY}
+                className="tap"
+                aria-label="Registrar foto no trajeto"
+                title={`Foto no trajeto (${routePhotos.photos.length}/${MAX_PHOTOS_PER_ACTIVITY})`}
+              >
+                <Icon.camera className="size-[18px]" />
+              </button>
+              <span className="metric text-[10px] font-bold text-muted">
+                {routePhotos.photos.length}/{MAX_PHOTOS_PER_ACTIVITY}
+              </span>
+            </>
+          ) : null}
+          <div className="metric flex size-10 flex-col items-center justify-center border border-line text-[11px] font-bold leading-none">
+            {stats.points}
+            <span className="mt-0.5 text-[8px] font-semibold text-muted">PTS</span>
+          </div>
         </div>
       </div>
+
+      <input
+        ref={cameraInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        onChange={(e) => {
+          void routePhotos.addFromFiles(e.target.files);
+          e.target.value = "";
+        }}
+      />
+
+      {resumed ? (
+        <p className="fade border border-lime/40 bg-lime/8 px-3 py-2.5 text-[11px] leading-relaxed text-lime">
+          Trajeto recuperado do último treino interrompido — continuamos somando de onde parou.
+        </p>
+      ) : null}
+      {routePhotos.notice ? (
+        <p className="fade border border-line bg-graphite px-3 py-2.5 text-[11px] text-muted">{routePhotos.notice}</p>
+      ) : null}
+      {routePhotos.photos.length > 0 ? (
+        <div className="border border-line bg-graphite p-3">
+          <div className="flex items-center justify-between">
+            <p className="eyebrow">Diário de rota</p>
+            <span className="metric text-[10px] font-bold text-muted">{formatBytes(routePhotos.totalBytes)}</span>
+          </div>
+          <div className="no-scrollbar mt-2.5 flex gap-2 overflow-x-auto">
+            {routePhotos.photos.map((p) => (
+              <div key={p.localId} className="relative shrink-0">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={p.dataUrl} alt="Foto do trajeto" className="size-16 object-cover" />
+                <span className="metric absolute bottom-0 left-0 right-0 bg-ink/80 py-0.5 text-center text-[9px] font-bold text-lime">
+                  {p.kmMark.toFixed(1)} km
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       {sport.outdoor ? (
         <div className="relative h-56 border border-line">
@@ -493,15 +636,23 @@ export function RecordClient({
           recompensas e rankings.
         </p>
       </div>
+
+      <PocketMode
+        active={pocket}
+        onDeactivate={() => setPocket(false)}
+        elapsedSec={Math.round(stats.elapsedSec)}
+        distanceM={stats.distanceM}
+        sportAccent={sport.color}
+      />
     </div>
   );
 }
 
 function Metric({ label, value, accent }: { label: string; value: string; accent?: string }) {
   return (
-    <div className=" bg-surface px-3 py-2 hairline">
-      <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">{label}</p>
-      <p className="tabular text-lg font-bold" style={accent ? { color: accent } : undefined}>
+    <div className="bg-graphite px-3 py-2.5">
+      <p className="text-[9px] font-display font-bold uppercase tracking-[0.16em] text-muted">{label}</p>
+      <p className="metric mt-0.5 text-[17px] font-bold" style={accent ? { color: accent } : undefined}>
         {value}
       </p>
     </div>

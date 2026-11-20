@@ -113,6 +113,8 @@ export function categoryEmblem(category: QuestCategory, kind: string): EmblemKey
   if (kind === "endurance") return "badge-mtb-trail";
   if (kind === "collectible") return "chest-gold";
   if (kind === "exploration") return "portal-blue";
+  // Check-in fotográfico: bússola comunica "descobrir e registrar".
+  if (kind === "checkin") return "compass";
   return CATEGORY_META[category]?.emblem ?? "flag-bike-mountain";
 }
 

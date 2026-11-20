@@ -15,6 +15,7 @@ import {
   type User,
 } from "@/db/schema";
 import { elevationStats, haversine, totalDistance } from "@/lib/geo";
+import { activityPhotos } from "@/db/schema";
 import { categoryAccent, categoryEmblem, type QuestCategory } from "@/lib/emblems";
 import { levelFromXp } from "@/lib/levels";
 import {
@@ -306,6 +307,7 @@ export async function captureQuest(
   user: User,
   questId: number,
   position: { lat: number; lng: number; accuracyM?: number | null; speedKmh?: number | null },
+  photo?: { dataUrl: string; mimeType: string; lat: number; lng: number } | null,
 ): Promise<CaptureResult> {
   const rows = await db.select().from(quests).where(eq(quests.id, questId)).limit(1);
   const quest = rows[0];
@@ -346,6 +348,15 @@ export async function captureQuest(
     }
   }
 
+  // Check-in fotográfico: exige uma foto real tirada no local pelo app.
+  if (quest.requiresPhoto && !photo?.dataUrl) {
+    return {
+      ok: false,
+      reason: "Este desafio pede um registro fotográfico: tire uma foto real no local para concluí-lo.",
+      quest: toView(quest, progress, null),
+    };
+  }
+
   // Boss precisa ter HP zerado por desafios reais.
   if (quest.kind === "boss" && quest.bossMaxHp > 0) {
     const hp = progress?.hp ?? quest.bossMaxHp;
@@ -383,6 +394,24 @@ export async function captureQuest(
     await db.update(questProgress).set(payload).where(eq(questProgress.id, progress.id));
   } else {
     await db.insert(questProgress).values({ userId: user.id, questId, ...payload });
+  }
+
+  // Foto do check-in: armazenada vinculada ao objetivo concluído.
+  if (quest.requiresPhoto && photo?.dataUrl) {
+    const decoded = decodePhotoDataUrl(photo.dataUrl);
+    if (decoded) {
+      await db.insert(activityPhotos).values({
+        activityId: null,
+        userId: user.id,
+        data: decoded.buffer,
+        mimeType: decoded.mime,
+        caption: `Check-in · ${quest.name}`,
+        position: 0,
+        latitude: photo.lat ?? position.lat,
+        longitude: photo.lng ?? position.lng,
+        checkinQuestId: quest.id,
+      });
+    }
   }
 
   // Recompensa única: XP e moedas creditadas uma única vez (state passa a completed).
@@ -433,6 +462,16 @@ export async function startQuest(userId: number, questId: number): Promise<boole
 }
 
 /* --------------------------- Missões dinâmicas e inteligentes --------------------------- */
+
+const MAX_CHECKIN_BYTES = 3_500_000;
+
+function decodePhotoDataUrl(dataUrl: string): { buffer: Buffer; mime: string } | null {
+  const match = /^data:(image\/(?:jpeg|jpg|png|webp));base64,(.+)$/.exec(dataUrl.trim());
+  if (!match) return null;
+  const buffer = Buffer.from(match[2], "base64");
+  if (!buffer.length || buffer.length > MAX_CHECKIN_BYTES) return null;
+  return { buffer, mime: match[1] === "image/jpg" ? "image/jpeg" : match[1] };
+}
 
 type GenInput = {
   lat: number;
@@ -502,9 +541,21 @@ function scaleReward(tier: RingTier, base: number): { xp: number; coins: number 
   };
 }
 
+/**
+ * Escolhe um template variando entre os usados. Quando todos já apareceram,
+ * a lista é reciclada (começa nova rodada) em vez de devolver null — sem isso,
+ * a geração parava de criar missões após esgotar os nomes do primeiro ciclo.
+ */
 function pickVariety<T>(list: T[], used: Set<string>, keyOf: (item: T) => string): T | null {
+  if (list.length === 0) return null;
   const free = list.filter((item) => !used.has(keyOf(item)));
-  if (free.length === 0) return null;
+  if (free.length === 0) {
+    // Nova rodada: limpa os usados desta lista e recomeça.
+    list.forEach((item) => used.delete(keyOf(item)));
+    const chosen = list[0];
+    used.add(keyOf(chosen));
+    return chosen;
+  }
   const chosen = free[used.size % free.length];
   used.add(keyOf(chosen));
   return chosen;
@@ -742,6 +793,52 @@ export async function generateDynamicQuests(user: User, input: GenInput, limit =
       roadType: point.highway,
       verified: anchor.source === "overpass" && point.safe,
       safetyNote: point.safe ? roadSourceNote : "Via de tráfego rápido: capture somente parado, fora da pista.",
+      spawnedAt: nowIso,
+      expiresAt: expiresAt(ROTATION_HOURS),
+    });
+  }
+
+  /* -------- 2b) Check-ins fotográficos: registro da estrada / ponto de vista -------- */
+  const photoTemplates = [
+    { name: "Registro da Estrada", desc: "Chegue ao ponto marcado em via pública e registre uma foto real do caminho pelo app.", emblem: "compass" as const },
+    { name: "Ponto de Vista", desc: "Alcance o mirante/caminho público e registre uma foto real da vista pelo app.", emblem: "mountain-route-pin" as const },
+    { name: "Marco do Percurso", desc: "Chegue ao marco em via pública e registre uma foto real pelo app.", emblem: "chest-gold" as const },
+  ];
+  for (const ring of [RINGS[0], RINGS[1]]) {
+    const point = pickRoadPointInRing({ lat: input.lat, lng: input.lng }, roads, ring, usedRoads);
+    if (!point) continue;
+    const template = pickVariety(photoTemplates, usedVariety, (t) => t.name);
+    if (!template) continue;
+    const realDistance = haversine(input.lat, input.lng, point.lat, point.lng);
+    const tier = ringForDistance(realDistance);
+    const reward = scaleReward(tier, 200);
+    const slug = point.name ? point.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 26) : "via";
+    push({
+      key: `dyn-checkin-${epoch}-${slug}-${point.lat.toFixed(4)}`,
+      name: `${template.name} · ${point.name ?? "Via pública"}`,
+      description: `${template.desc} ${roadSourceNote}`,
+      kind: "checkin",
+      category: "explore",
+      difficulty: tier === "longo" ? "dificil" : "media",
+      emblemKey: template.emblem,
+      sport: null,
+      lat: point.lat,
+      lng: point.lng,
+      // Raio amplo: pensado para quem está em movimento e precisa apenas parar com segurança.
+      radiusM: 80,
+      targetValue: 0,
+      unit: "m",
+      xpReward: reward.xp,
+      coinsReward: reward.coins,
+      origin: "dynamic",
+      tier,
+      roadName: point.name,
+      roadType: point.highway,
+      requiresPhoto: true,
+      verified: anchor.source === "overpass" && point.safe,
+      safetyNote: point.safe
+        ? "Pare em local seguro antes de fotografar. Nunca fotografe em movimento."
+        : "Via de tráfego rápido: pare fora da pista antes de fotografar.",
       spawnedAt: nowIso,
       expiresAt: expiresAt(ROTATION_HOURS),
     });

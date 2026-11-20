@@ -132,9 +132,8 @@ export const activityPhotos = pgTable(
   "activity_photos",
   {
     id: serial("id").primaryKey(),
-    activityId: integer("activity_id")
-      .notNull()
-      .references(() => activities.id, { onDelete: "cascade" }),
+    /** Nulo em fotos de check-in de missão (não pertencem a uma atividade). */
+    activityId: integer("activity_id").references(() => activities.id, { onDelete: "cascade" }),
     userId: integer("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
@@ -144,9 +143,21 @@ export const activityPhotos = pgTable(
     height: integer("height").notNull().default(0),
     caption: varchar("caption", { length: 200 }),
     position: integer("position").notNull().default(0),
+    /** Latitude no instante da foto — crava a imagem no trajeto. */
+    latitude: doublePrecision("latitude"),
+    /** Longitude no instante da foto. */
+    longitude: doublePrecision("longitude"),
+    /** Quilômetro do treino no instante da foto. */
+    kmMark: doublePrecision("km_mark"),
+    /** Altitude (m) no instante da foto, quando disponível. */
+    altitudeM: doublePrecision("altitude_m"),
+    /** Carimbo de tempo do treino (ms desde o início), para o replay. */
+    elapsedAtMs: integer("elapsed_at_ms"),
+    /** true quando a foto concluir um check-in fotográfico de missão. */
+    checkinQuestId: integer("checkin_quest_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("photos_activity_idx").on(t.activityId)],
+  (t) => [index("photos_activity_idx").on(t.activityId), index("photos_geo_idx").on(t.latitude, t.longitude)],
 );
 
 export const kudos = pgTable(
@@ -405,6 +416,8 @@ export const quests = pgTable(
     spawnedAt: timestamp("spawned_at", { withTimezone: true }),
     /** Prazo de rotação: após expirar, o objetivo é trocado por outro local. */
     expiresAt: timestamp("expires_at", { withTimezone: true }),
+    /** true quando a missão exige foto real no local (check-in fotográfico). */
+    requiresPhoto: boolean("requires_photo").notNull().default(false),
     /** Indica se a área/percurso é de acesso confirmado. */
     verified: boolean("verified").notNull().default(false),
     safetyNote: varchar("safety_note", { length: 240 }),

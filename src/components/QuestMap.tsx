@@ -7,6 +7,7 @@ import { BottomSheet } from "@/components/BottomSheet";
 import { EmblemIcon } from "@/components/EmblemIcon";
 import { Icon } from "@/components/icons.client";
 import { CATEGORY_META, type QuestCategory } from "@/lib/emblems";
+import { compressImage } from "@/lib/image";
 import {
   DIFFICULTY_META,
   QUEST_STAT_LABEL,
@@ -71,6 +72,8 @@ export function QuestMap({ initialQuests, territories, territoryLines, segmentLi
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [listOpen, setListOpen] = useState(false);
   const [captured, setCaptured] = useState<{ quest: QuestView; xp: number; coins: number } | null>(null);
+  const [checkinPhoto, setCheckinPhoto] = useState<{ dataUrl: string; bytes: number } | null>(null);
+  const checkinInputRef = useRef<HTMLInputElement | null>(null);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [nearId, setNearId] = useState<number | null>(null);
@@ -212,14 +215,19 @@ export function QuestMap({ initialQuests, territories, territoryLines, segmentLi
   const allPoints: MapEmblem[] = useMemo(() => [...emblemPoints, ...checkpointEmblems], [emblemPoints, checkpointEmblems]);
 
   /* --------------------------------- Ações --------------------------------- */
-  async function act(action: "capture" | "start" | "pause" | "generate", questId?: number, paused?: boolean) {
+  async function act(
+    action: "capture" | "start" | "pause" | "generate",
+    questId?: number,
+    paused?: boolean,
+    photo?: { dataUrl: string; mimeType: string },
+  ) {
     setBusy(true);
     try {
       const [lng, lat] = pos ?? [0, 0];
       const res = await fetch("/api/quests", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, questId, paused, lat, lng, accuracyM: accuracy, speedKmh: speed }),
+        body: JSON.stringify({ action, questId, paused, lat, lng, accuracyM: accuracy, speedKmh: speed, photo }),
       });
       const json = (await res.json()) as {
         ok: boolean;
@@ -235,6 +243,7 @@ export function QuestMap({ initialQuests, territories, territoryLines, segmentLi
       }
       if (json.captured) {
         setCaptured({ quest: json.captured.quest, xp: json.captured.xp, coins: json.captured.coins });
+        setCheckinPhoto(null);
       }
     } catch {
       setToast("Falha de conexão. Tente novamente.");
@@ -428,9 +437,47 @@ export function QuestMap({ initialQuests, territories, territoryLines, segmentLi
               </p>
             ) : null}
 
+            {selected.requiresPhoto ? (
+              <p className="mt-3 border border-line bg-ink/60 px-2.5 py-2 text-[11px] leading-relaxed text-muted">
+                📷 Check-in fotográfico: pare em local seguro e registre uma foto real do caminho. Nunca fotografe em
+                movimento.
+              </p>
+            ) : null}
+            {checkinPhoto && selected.requiresPhoto ? (
+              <div className="mt-3 flex items-center gap-2.5 border border-line bg-graphite p-2">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={checkinPhoto.dataUrl} alt="Foto do check-in" className="size-14 object-cover" />
+                <p className="min-w-0 flex-1 text-[11px] leading-relaxed text-muted">
+                  Registro pronto · {Math.round(checkinPhoto.bytes / 1024)} KB
+                </p>
+                <button type="button" onClick={() => setCheckinPhoto(null)} className="tap size-8 shrink-0" aria-label="Descartar">
+                  <Icon.close className="size-3.5" />
+                </button>
+              </div>
+            ) : null}
+
             <div className="mt-3 flex gap-2">
               {selected.state === "completed" ? (
                 <span className="btn btn-dark flex-1 cursor-default text-lime">Concluída</span>
+              ) : selected.capturable && selected.requiresPhoto ? (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    if (checkinPhoto) {
+                      void act("capture", selected.id, undefined, {
+                        dataUrl: checkinPhoto.dataUrl,
+                        mimeType: "image/webp",
+                      });
+                    } else {
+                      checkinInputRef.current?.click();
+                    }
+                  }}
+                  className="btn btn-primary flex-1"
+                >
+                  <Icon.camera className="size-4" />
+                  {checkinPhoto ? "Enviar registro" : "Tirar foto"}
+                </button>
               ) : selected.capturable ? (
                 <button type="button" disabled={busy} onClick={() => void act("capture", selected.id)} className="btn btn-primary flex-1">
                   <Icon.bolt className="size-4" />
@@ -474,6 +521,25 @@ export function QuestMap({ initialQuests, territories, territoryLines, segmentLi
           </Link>
         )}
       </div>
+
+      <input
+        ref={checkinInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        onChange={async (e) => {
+          const file = e.target.files?.[0];
+          e.target.value = "";
+          if (!file || !selected) return;
+          try {
+            const shot = await compressImage(file);
+            setCheckinPhoto({ dataUrl: shot.dataUrl, bytes: shot.bytes });
+          } catch {
+            setToast("Não foi possível processar a foto.");
+            window.setTimeout(() => setToast(null), 3000);
+          }
+        }}
+      />
 
       {/* Filtros */}
       <BottomSheet open={filtersOpen} onClose={() => setFiltersOpen(false)} eyebrow="Camadas" title="Filtros do mapa">

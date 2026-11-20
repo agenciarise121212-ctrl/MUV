@@ -4,6 +4,7 @@ import { requireUser } from "@/lib/auth";
 import { AppShell } from "@/components/AppShell";
 import MapCanvas from "@/components/MapCanvas";
 import { PhotoGrid } from "@/components/Lightbox";
+import { RouteDiary, type GeoPhoto } from "@/components/RouteDiary";
 import { Card, Pill } from "@/components/ui";
 import { Avatar } from "@/components/Avatar";
 import { IconSat, SportIcon } from "@/components/icons";
@@ -47,6 +48,17 @@ export default async function ActivityDetailPage({ params }: { params: Promise<{
   const startPin = lineCoords[0];
   const endPin = lineCoords[lineCoords.length - 1];
   const isOwner = activity.userId === user.id;
+  // Fotos cravadas no trajeto (com coordenadas do instante da captura).
+  const geoPhotos: GeoPhoto[] = photos
+    .filter((ph) => ph.latitude !== null && ph.longitude !== null)
+    .map((ph) => ({
+      id: ph.id,
+      latitude: ph.latitude,
+      longitude: ph.longitude,
+      kmMark: ph.kmMark,
+      caption: ph.caption,
+      elapsedAtMs: ph.elapsedAtMs,
+    }));
 
   return (
     <AppShell user={user} title={sport.label} backHref="/app/activities">
@@ -76,21 +88,21 @@ export default async function ActivityDetailPage({ params }: { params: Promise<{
         </div>
       </section>
 
-      <div className="mt-3 overflow-hidden rounded-2xl hairline">
+      <div className="mt-3">
         {lineCoords.length > 1 ? (
-          <div className="relative h-[280px]">
-            <MapCanvas
-              className="absolute inset-0"
-              lines={[{ coords: lineCoords, color: sport.color, width: 6 }]}
-              markers={[
-                ...(startPin ? [{ center: startPin, color: "#d5ff45" }] : []),
-                ...(endPin ? [{ center: endPin, color: "#ffffff" }] : []),
-              ]}
-              autoFit
-            />
-          </div>
+          <RouteDiary
+            photos={geoPhotos}
+            track={track.map((p) => ({ lat: p.lat, lng: p.lng, t: p.t }))}
+            sportColor={sport.color}
+            sportLabel={sport.label}
+            city={activity.location}
+            athleteName={activity.authorName}
+            athleteColor={activity.authorAvatar}
+            totalDistanceM={activity.distanceM}
+            startedAt={new Date(activity.startedAt).toISOString()}
+          />
         ) : (
-          <div className="grid h-40 place-items-center bg-graphite-2 text-[13px] text-muted">
+          <div className="grid h-40 place-items-center border border-line bg-graphite-2 text-[13px] text-muted">
             {activity.isIndoor ? "Atividade indoor · sem trajeto GPS" : "Sem trajeto GPS registrado"}
           </div>
         )}
@@ -121,7 +133,9 @@ export default async function ActivityDetailPage({ params }: { params: Promise<{
 
       {photos.length > 0 ? (
         <section className="mt-6">
-          <h2 className="display-2 mb-3 text-[15px]">Fotos da atividade ({photos.length})</h2>
+          <h2 className="display-2 mb-3 text-[15px]">
+            {geoPhotos.length > 0 ? "Outras fotos" : "Fotos da atividade"} ({photos.length})
+          </h2>
           <PhotoGrid photos={photos} sport={sport.key} />
           {photos.some((p) => p.caption) ? (
             <ul className="mt-2 space-y-1">

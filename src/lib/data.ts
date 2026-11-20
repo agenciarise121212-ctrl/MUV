@@ -256,7 +256,16 @@ export async function activityComments(activityId: number) {
 
 export async function activityPhotoIds(activityId: number) {
   return db
-    .select({ id: activityPhotos.id, caption: activityPhotos.caption, position: activityPhotos.position })
+    .select({
+      id: activityPhotos.id,
+      caption: activityPhotos.caption,
+      position: activityPhotos.position,
+      latitude: activityPhotos.latitude,
+      longitude: activityPhotos.longitude,
+      kmMark: activityPhotos.kmMark,
+      altitudeM: activityPhotos.altitudeM,
+      elapsedAtMs: activityPhotos.elapsedAtMs,
+    })
     .from(activityPhotos)
     .where(eq(activityPhotos.activityId, activityId))
     .orderBy(activityPhotos.position);

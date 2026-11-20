@@ -4,7 +4,17 @@ import type { Quest, QuestWaypoint } from "@/db/schema";
 import type { RingTier } from "@/lib/roads";
 
 export type QuestDifficulty = "facil" | "media" | "dificil" | "lendaria";
-export type QuestKind = "exploration" | "distance" | "climb" | "endurance" | "secret" | "trail" | "collectible" | "route" | "boss";
+export type QuestKind =
+  | "exploration"
+  | "distance"
+  | "climb"
+  | "endurance"
+  | "secret"
+  | "trail"
+  | "collectible"
+  | "route"
+  | "boss"
+  | "checkin";
 
 export const DIFFICULTY_META: Record<QuestDifficulty, { label: string; accent: string }> = {
   facil: { label: "Fácil", accent: "#63e6be" },
@@ -23,6 +33,7 @@ export const KIND_LABEL: Record<QuestKind, string> = {
   collectible: "Coleção",
   route: "Rota de aventura",
   boss: "Boss geográfico",
+  checkin: "Check-in fotográfico",
 };
 
 export const TIER_LABEL: Record<RingTier, string> = {
@@ -87,6 +98,8 @@ export type QuestView = {
   roadSafe: boolean;
   isSpecial: boolean;
   prerequisite: number;
+  /** true quando a missão exige foto real no local (check-in fotográfico). */
+  requiresPhoto: boolean;
   spawnedAt: string | null;
   expiresAt: string | null;
   timeLeftSec: number | null;
@@ -137,6 +150,9 @@ export function toQuestView(
   let capturable = false;
   let blockedReason: string | null = null;
 
+  // Check-in fotográfico: exige foto real tirada no local, além da presença.
+  const photoCheck = Boolean((quest as { requiresPhoto?: boolean }).requiresPhoto);
+
   if (state !== "completed" && quest.lat !== null) {
     if (left !== null && left <= 0) {
       blockedReason = "Tempo esgotado. Este objetivo vai rotacionar para outro local.";
@@ -144,7 +160,7 @@ export function toQuestView(
       blockedReason = "Sinal de GPS impreciso — aproxime-se em céu aberto para validar presença.";
     } else if (!inRange) {
       blockedReason = `Aproxime-se: faltam ${Math.max(0, Math.round((dist ?? 0) - effectiveRadius(quest, position?.accuracyM ?? null)))} m.`;
-    } else if (position?.speedKmh != null && !isStationary(position.speedKmh)) {
+    } else if (!photoCheck && position?.speedKmh != null && !isStationary(position.speedKmh)) {
       blockedReason = "Você está em movimento. Pare com segurança para interagir.";
     } else {
       capturable = true;
@@ -184,6 +200,7 @@ export function toQuestView(
     roadSafe: !quest.roadType || !["trunk", "trunk_link", "primary", "primary_link"].includes(quest.roadType),
     isSpecial: quest.isSpecial,
     prerequisite: quest.prerequisite,
+    requiresPhoto: Boolean(quest.requiresPhoto),
     spawnedAt: quest.spawnedAt ? new Date(quest.spawnedAt).toISOString() : null,
     expiresAt,
     timeLeftSec: left,

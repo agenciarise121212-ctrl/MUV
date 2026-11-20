@@ -7,6 +7,8 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 const MAX_BYTES = 4_500_000;
+/** Limite de fotos por atividade (contador discreto `n/5` na interface). */
+const MAX_PHOTOS = 5;
 
 function decodeDataUrl(dataUrl: string): { buffer: Buffer; mime: string } | null {
   const match = /^data:(image\/(?:jpeg|jpg|png|webp));base64,(.+)$/.exec(dataUrl.trim());
@@ -28,18 +30,27 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     .limit(1);
   if (owned.length === 0) return Response.json({ ok: false, error: "Atividade não encontrada" }, { status: 404 });
 
-  const body = (await request.json().catch(() => null)) as { photos?: { dataUrl?: string; caption?: string }[] } | null;
-  const photos = (body?.photos ?? []).filter((p) => typeof p?.dataUrl === "string").slice(0, 12);
+  const body = (await request.json().catch(() => null)) as
+    | { photos?: { dataUrl?: string; caption?: string; lat?: number; lng?: number; kmMark?: number; altitudeM?: number | null; elapsedAtMs?: number; checkinQuestId?: number }[] }
+    | null;
+  const photos = (body?.photos ?? []).filter((p) => typeof p?.dataUrl === "string").slice(0, MAX_PHOTOS);
   if (photos.length === 0) return Response.json({ ok: false, error: "Nenhuma foto enviada" }, { status: 400 });
 
-  const [{ next }] = await db
-    .select({ next: sql<number>`coalesce(max(${activityPhotos.position}), -1) + 1` })
+  const [{ next, existing }] = await db
+    .select({
+      next: sql<number>`coalesce(max(${activityPhotos.position}), -1) + 1`,
+      existing: sql<number>`count(*)::int`,
+    })
     .from(activityPhotos)
     .where(eq(activityPhotos.activityId, id));
+  const remaining = Math.max(0, MAX_PHOTOS - Number(existing));
+  if (remaining === 0) {
+    return Response.json({ ok: false, error: "Limite de 5 fotos por atividade atingido." }, { status: 400 });
+  }
 
   const inserted: number[] = [];
   let position = Number(next);
-  for (const photo of photos) {
+  for (const photo of photos.slice(0, remaining)) {
     const decoded = decodeDataUrl(photo.dataUrl ?? "");
     if (!decoded) continue;
     const [row] = await db
@@ -51,6 +62,13 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
         mimeType: decoded.mime,
         caption: (photo.caption ?? "").slice(0, 190) || null,
         position,
+        // Geolocalização do instante da foto — crava a imagem no trajeto.
+        latitude: Number.isFinite(Number(photo.lat)) ? Number(photo.lat) : null,
+        longitude: Number.isFinite(Number(photo.lng)) ? Number(photo.lng) : null,
+        kmMark: Number.isFinite(Number(photo.kmMark)) ? Number(photo.kmMark) : null,
+        altitudeM: Number.isFinite(Number(photo.altitudeM)) ? Number(photo.altitudeM) : null,
+        elapsedAtMs: Number.isFinite(Number(photo.elapsedAtMs)) ? Math.max(0, Math.round(Number(photo.elapsedAtMs))) : null,
+        checkinQuestId: Number.isInteger(photo.checkinQuestId) ? Number(photo.checkinQuestId) : null,
       })
       .returning({ id: activityPhotos.id });
     inserted.push(row.id);

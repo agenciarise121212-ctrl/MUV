@@ -12,6 +12,8 @@ type Payload = {
   lng?: number;
   accuracyM?: number;
   speedKmh?: number;
+  /** Foto real do check-in fotográfico (data URL comprimido no cliente). */
+  photo?: { dataUrl?: string; mimeType?: string };
 };
 
 function readPosition(body: Payload | null) {
@@ -117,7 +119,17 @@ export async function POST(request: Request) {
 
   if (body.action === "capture") {
     if (!position) return Response.json({ ok: false, error: "Localização ausente ou inválida" }, { status: 400 });
-    const result = await captureQuest(user, questId, position);
+    // Check-in fotográfico: a foto precisa existir e ter coordenada coerente.
+    const photo =
+      body.photo?.dataUrl && typeof body.photo.dataUrl === "string"
+        ? {
+            dataUrl: body.photo.dataUrl,
+            mimeType: body.photo.mimeType ?? "image/webp",
+            lat: position.lat,
+            lng: position.lng,
+          }
+        : null;
+    const result = await captureQuest(user, questId, position, photo);
     if (!result.ok) return Response.json({ ok: false, error: result.reason, quest: result.quest }, { status: 422 });
     const board = await loadQuestBoard(user.id, position);
     return Response.json({ ok: true, captured: { xp: result.xp, coins: result.coins, level: result.level, quest: result.quest }, ...board });
