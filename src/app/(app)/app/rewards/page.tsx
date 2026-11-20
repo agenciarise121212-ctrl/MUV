@@ -2,6 +2,8 @@ import { requireUser } from "@/lib/auth";
 import { AppShell } from "@/components/AppShell";
 import { Card, Pill, ProgressBar } from "@/components/ui";
 import { Avatar } from "@/components/Avatar";
+import { EmblemIcon } from "@/components/EmblemIcon";
+import { EMBLEMS, EMBLEM_KEYS, emblemForAchievement } from "@/lib/emblems";
 import { RedeemButton } from "@/components/actions";
 import { achievementsForUser, rewardsForUser } from "@/lib/data";
 import { formatNumber, pct, timeAgo } from "@/lib/format";
@@ -21,6 +23,7 @@ export default async function RewardsPage() {
   const lvl = levelFromXp(user.xp);
   const unlocked = achievements.filter((a) => a.unlockedAt);
   const locked = achievements.filter((a) => !a.unlockedAt);
+  const collected = Array.from(new Set(unlocked.map((a) => emblemForAchievement(a))));
   const categories = Array.from(new Set(achievements.map((a) => a.category)));
 
   return (
@@ -70,7 +73,7 @@ export default async function RewardsPage() {
           {catalog.map((r) => (
             <Card key={r.id} className="p-4">
               <div className="flex items-start gap-3">
-                <span className="grid size-10 shrink-0 place-items-center bg-graphite-2 text-lg">{r.emoji}</span>
+                <EmblemIcon emblem={rewardEmblem(r.category)} size={44} />
                 <div className="min-w-0 flex-1">
                   <p className="text-[14px] font-semibold">{r.name}</p>
                   <p className="text-[11px] leading-snug text-muted">{r.description}</p>
@@ -98,7 +101,7 @@ export default async function RewardsPage() {
               const reward = catalog.find((r) => r.id === m.rewardId);
               return (
                 <Card key={m.id} className="flex items-center gap-3 p-3">
-                  <span className="text-lg">{reward?.emoji ?? "🎁"}</span>
+                  <EmblemIcon emblem={rewardEmblem(reward?.category)} size={38} />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-[14px] font-semibold">{reward?.name ?? "Recompensa"}</p>
                     <p className="text-[11px] text-muted">
@@ -123,7 +126,7 @@ export default async function RewardsPage() {
           <div className="grid grid-cols-2 gap-2">
             {unlocked.map((a) => (
               <Card key={a.key} className="p-3">
-                <p className="text-xl">{a.icon}</p>
+                <EmblemIcon emblem={emblemForAchievement(a)} size={44} />
                 <p className="mt-1 text-[13px] font-bold leading-tight">{a.name}</p>
                 <p className="mt-1 text-[11px] leading-snug text-muted">{a.description}</p>
                 <p className="mt-2 text-[10px] font-bold" style={{ color: TIERS[a.tier]?.color ?? "#d5ff45" }}>
@@ -141,7 +144,7 @@ export default async function RewardsPage() {
           {locked.map((a) => (
             <Card key={a.key} className="p-3">
               <div className="flex items-start gap-3">
-                <span className="grid size-9 shrink-0 place-items-center bg-graphite-2 text-base opacity-60">{a.icon}</span>
+                <EmblemIcon emblem={emblemForAchievement(a)} size={38} />
                 <div className="min-w-0 flex-1">
                   <p className="text-[13px] font-bold leading-tight">{a.name}</p>
                   <p className="text-[11px] leading-snug text-muted">{a.description}</p>
@@ -161,4 +164,17 @@ export default async function RewardsPage() {
       </section>
     </AppShell>
   );
+}
+
+const REWARD_EMBLEMS: Record<string, string> = {
+  kit: "chest-gold",
+  cupom: "potion-lightning",
+  serviço: "helmet-cycling-blue",
+  evento: "trophy-gold",
+  experiência: "portal-blue",
+};
+
+function rewardEmblem(category?: string | null): string {
+  if (!category) return "chest-gold";
+  return REWARD_EMBLEMS[category] ?? "chest-gold";
 }

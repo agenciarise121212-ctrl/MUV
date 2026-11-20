@@ -487,3 +487,65 @@ input[type="checkbox"] {
   border-color: var(--color-lime);
   color: var(--color-lime);
 }
+
+/* ----------------------- Animações de captura (RPG) ----------------------- */
+
+@keyframes capture-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.4) rotate(-8deg);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.08) rotate(2deg);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(0deg);
+  }
+}
+.capture-pop {
+  animation: capture-pop 0.62s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+}
+
+@keyframes capture-burst {
+  0% {
+    width: 40px;
+    height: 40px;
+    opacity: 0.75;
+  }
+  100% {
+    width: 340px;
+    height: 340px;
+    opacity: 0;
+  }
+}
+.capture-burst {
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  border-radius: 9999px;
+  background: radial-gradient(circle, rgba(213, 255, 69, 0.55) 0%, rgba(213, 255, 69, 0) 70%);
+  animation: capture-burst 0.9s ease-out both;
+  pointer-events: none;
+}
+
+@keyframes soft-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+.float-soft {
+  animation: soft-float 3.4s ease-in-out infinite;
+}
+
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}

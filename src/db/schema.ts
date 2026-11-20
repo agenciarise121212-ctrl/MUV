@@ -346,6 +346,82 @@ export const personalRecords = pgTable(
   (t) => [unique("pr_unique").on(t.userId, t.sport, t.category)],
 );
 
+/** Ponto de controle de uma rota de missão (validado contra a trilha GPS real). */
+export type QuestWaypoint = { lat: number; lng: number; label: string; order: number };
+
+export const quests = pgTable(
+  "quests",
+  {
+    id: serial("id").primaryKey(),
+    key: varchar("key", { length: 64 }).notNull().unique(),
+    name: varchar("name", { length: 140 }).notNull(),
+    description: varchar("description", { length: 500 }).notNull(),
+    /** exploration | distance | climb | endurance | secret | trail | collectible | route | boss */
+    kind: varchar("kind", { length: 24 }).notNull(),
+    /** mission | special | chest | secret | boss | explore | checkpoint */
+    category: varchar("category", { length: 24 }).notNull(),
+    /** facil | media | dificil | lendaria */
+    difficulty: varchar("difficulty", { length: 16 }).notNull().default("media"),
+    emblemKey: varchar("emblem_key", { length: 40 }).notNull().default("flag-bike-mountain"),
+    sport: varchar("sport", { length: 32 }),
+    /** Coordenadas do objetivo. Nulas em missões exclusivamente por métrica. */
+    lat: doublePrecision("lat"),
+    lng: doublePrecision("lng"),
+    /** Raio de ativação em metros (captura presencial). */
+    radiusM: doublePrecision("radius_m").notNull().default(45),
+    /** Meta da missão: metros, metros de ganho ou checkpoints. */
+    targetValue: doublePrecision("target_value").notNull().default(0),
+    unit: varchar("unit", { length: 16 }).notNull().default("m"),
+    xpReward: integer("xp_reward").notNull().default(150),
+    coinsReward: integer("coins_reward").notNull().default(15),
+    waypoints: jsonb("waypoints").$type<QuestWaypoint[]>().notNull().default([]),
+    bossKind: varchar("boss_kind", { length: 24 }),
+    bossMaxHp: integer("boss_max_hp").notNull().default(0),
+    /** Origem da missão: catalogue | gerada por dinâmica. */
+    origin: varchar("origin", { length: 16 }).notNull().default("catalogue"),
+    /** Indica se a área/percurso é de acesso confirmado. */
+    verified: boolean("verified").notNull().default(false),
+    safetyNote: varchar("safety_note", { length: 240 }),
+    isActive: boolean("is_active").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("quests_kind_idx").on(t.kind), index("quests_active_idx").on(t.isActive)],
+);
+
+export const questProgress = pgTable(
+  "quest_progress",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    questId: integer("quest_id")
+      .notNull()
+      .references(() => quests.id, { onDelete: "cascade" }),
+    /** available | unlocked | in_progress | completed */
+    state: varchar("state", { length: 16 }).notNull().default("available"),
+    progress: doublePrecision("progress").notNull().default(0),
+    /** HP restante em bosses. */
+    hp: integer("hp"),
+    /** Índices de checkpoints já validados no percurso real. */
+    checkpointsHit: jsonb("checkpoints_hit").$type<number[]>().notNull().default([]),
+    /** Atividades reais já creditadas — evita recompensa duplicada. */
+    creditedActivities: jsonb("credited_activities").$type<number[]>().notNull().default([]),
+    activityId: integer("activity_id"),
+    capturedLat: doublePrecision("captured_lat"),
+    capturedLng: doublePrecision("captured_lng"),
+    accuracyM: doublePrecision("accuracy_m"),
+    paused: boolean("paused").notNull().default(false),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [unique("quest_progress_unique").on(t.userId, t.questId)],
+);
+
+export type Quest = typeof quests.$inferSelect;
+export type QuestProgress = typeof questProgress.$inferSelect;
+
 export type User = typeof users.$inferSelect;
 export type Activity = typeof activities.$inferSelect;
 export type ActivityPhoto = typeof activityPhotos.$inferSelect;

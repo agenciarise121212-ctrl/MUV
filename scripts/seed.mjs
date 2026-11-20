@@ -549,6 +549,84 @@ async function main() {
     await client.query(`update users set xp = $2, coins = $3 where id = $1`, [uid, xp + activityXp + territoryXp, coins + 120 + Math.round((activityXp + territoryXp) / 10)]);
   }
 
+  // ===================== MISSÕES, BOSSES E ROTAS (RPG) =====================
+  // Ancorados nos territórios já cadastrados (áreas públicas conhecidas),
+  // nunca em coordenadas aleatórias nem na base residencial dos atletas.
+  const questRows = [
+    // ---- Bosses geográficos ----
+    ["boss-titan-cantareira", "TITÃ · Guardião da Montanha", "O guardião da Serra da Cantareira só cede se você vencer subidas reais. Cada treino com ganho de elevação suficiente tira 1 de HP. Presença física obrigatória para a derrota final.", "boss", "boss", "lendaria", "boss-golem", "run_trail", TERRITORIES[5][4], TERRITORIES[5][5], 60, 250, "m", 900, 120, [], "climb", 3, "catalogue", true, "Trilha de montanha: leve água, avise alguém e evite horários de pouca visibilidade."],
+    ["boss-colosso-ibirapuera", "COLOSSO · Sentinela do Planalto", "Sentinela do parque mais movimentado da cidade. Exige 20 km acumulados em pedais reais para perder os 3 pontos de HP.", "boss", "boss", "dificil", "boss-golem", "ride", TERRITORIES[0][4], TERRITORIES[0][5], 55, 20000, "m", 700, 90, [], "endurance", 3, "catalogue", true, "Ciclovia interna do parque. Respeite pedestres e velocidade máxima."],
+    ["boss-sentinela-billings", "SENTINELA · Senhor da Represa", "Boss lendário das subidas da Billings. Cinco desafios reais vencidos derrubam seu HP por completo.", "boss", "boss", "lendaria", "boss-golem", "ride", TERRITORIES[4][4], TERRITORIES[4][5], 60, 15000, "m", 1100, 150, [], "legendary", 5, "catalogue", true, "Estradas com tráfego misto: priorize seguranca e evite pedaladas olhando para a tela."],
+    // ---- Rotas de aventura (checkpoints validados no trajeto real) ----
+    ["route-conquista-montanha", "CONQUISTA DA MONTANHA", "Rota de 4 pontos na Serra da Cantareira. A missão só conclui se o trajeto registrado passar por todos os checkpoints — chegar perto do destino não basta.", "route", "mission", "dificil", "mountain-route-pin", "run_trail", TERRITORIES[5][4], TERRITORIES[5][5], 45, 0, "m", 800, 100,
+      [
+        { lat: TERRITORIES[5][4], lng: TERRITORIES[5][5], label: "Portão de entrada", order: 0 },
+        { lat: TERRITORIES[5][4] + 0.0042, lng: TERRITORIES[5][5] + 0.0031, label: "Mirante do vale", order: 1 },
+        { lat: TERRITORIES[5][4] + 0.0081, lng: TERRITORIES[5][5] - 0.0022, label: "Cume pedreira", order: 2 },
+        { lat: TERRITORIES[5][4] + 0.0124, lng: TERRITORIES[5][5] + 0.0018, label: "Base do TITÃ", order: 3 },
+      ], null, 0, "catalogue", false, "Percurso precisa ser verificado no local. Trilhas podem ter acesso restrito."],
+    ["route-laco-carmo", "LAÇO DO PARQUE DO CARMO", "Percurso urbano de 3 checkpoints dentro do parque. Ideal para primeiro contato com rotas de missão.", "route", "mission", "facil", "flag-checkered-flame", "walk", TERRITORIES[1][4], TERRITORIES[1][5], 40, 0, "m", 320, 35,
+      [
+        { lat: TERRITORIES[1][4], lng: TERRITORIES[1][5], label: "Praça central", order: 0 },
+        { lat: TERRITORIES[1][4] + 0.0026, lng: TERRITORIES[1][5] - 0.0024, label: "Alameda das flores", order: 1 },
+        { lat: TERRITORIES[1][4] - 0.0018, lng: TERRITORIES[1][5] + 0.0032, label: "Mirante da represa", order: 2 },
+      ], null, 0, "catalogue", true, "Área pública com acesso confirmado."],
+    // ---- Baús e segredos ----
+    ["chest-villa-lobos", "BAÚ · Tesouro do Villa-Lobos", "Baú escondido na borda do parque. Chegue ao raio de ativação e capture presencialmente.", "collectible", "chest", "media", "chest-gold", "ride", TERRITORIES[2][4], TERRITORIES[2][5], 40, 0, "m", 260, 40, [], null, 0, "catalogue", true, null],
+    ["chest-boqueirao", "BAÚ · Maré do Boqueirão", "Recompensa escondida no calçadão do litoral. Capture no local, com o GPS do dispositivo.", "collectible", "chest", "media", "chest-gold", "walk", TERRITORIES[7][4], TERRITORIES[7][5], 40, 0, "m", 240, 36, [], null, 0, "catalogue", true, null],
+    ["secret-cristal-paulista", "CRISTAL · Segredo da Paulista", "Localização especial revelada apenas a quem chega perto. Capture no raio de ativação para descobrir.", "secret", "secret", "dificil", "crystal-purple", "ride_urban", TERRITORIES[6][4], TERRITORIES[6][5], 35, 0, "m", 340, 45, [], null, 0, "catalogue", true, "Avenida com tráfego intenso: interaja somente parado, longe da pista."],
+    ["secret-cristal-usp", "CRISTAL · Fragmento do Campus", "Fragmento escondido no campus. Missão secreta de exploração com bônus de XP.", "secret", "secret", "media", "crystal-purple", "run", TERRITORIES[3][4], TERRITORIES[3][5], 35, 0, "m", 300, 38, [], null, 0, "catalogue", true, null],
+    // ---- Exploração ----
+    ["explore-portal-carmo", "PORTAL · Portão do Carmo", "Ponto de exploração no parque. Registre presença no local para abrir o portal.", "exploration", "explore", "facil", "portal-blue", "walk", TERRITORIES[1][4], TERRITORIES[1][5], 45, 0, "m", 140, 14, [], null, 0, "catalogue", true, null],
+    ["explore-bussola-pinheiros", "BÚSSOLA · Rio Pinheiros", "Ponto de exploração na ciclovia. Alcance o raio de ativação e capture.", "exploration", "explore", "facil", "compass", "ride", -23.566, -46.701, 45, 0, "m", 150, 15, [], null, 0, "catalogue", true, null],
+    // ---- Métricas acumuladas por atividade real ----
+    ["distance-5k-run", "Missão de distância · 5 km", "Acumule 5 km em corridas ou caminhadas registradas por GPS. Cada atividade conta uma única vez.", "distance", "mission", "facil", "target-red", "run", null, null, 45, 5000, "m", 180, 18, [], null, 0, "catalogue", true, null],
+    ["distance-50k-ride", "Missão de distância · 50 km", "Acumule 50 km em pedais reais. Progresso somado de atividades publicadas.", "distance", "mission", "media", "target-red", "ride", null, null, 45, 50000, "m", 420, 45, [], null, 0, "catalogue", true, null],
+    ["climb-300-elev", "Missão de subida · 300 m", "Acumule 300 m de ganho de elevação medido pelo altímetro do dispositivo.", "climb", "special", "media", "mountain-route-pin", "ride", null, null, 45, 300, "m_elev", 260, 28, [], null, 0, "catalogue", true, null],
+    ["endurance-10k-resistencia", "Missão de resistência · 10 km", "Complete uma única atividade de 10 km ou mais para validar resistência.", "endurance", "special", "media", "badge-mtb-trail", "ride", null, null, 45, 10000, "m", 300, 32, [], null, 0, "catalogue", true, null],
+  ];
+
+  for (const q of questRows) {
+    await client.query(
+      `insert into quests (key, name, description, kind, category, difficulty, emblem_key, sport, lat, lng, radius_m,
+        target_value, unit, xp_reward, coins_reward, waypoints, boss_kind, boss_max_hp, origin, verified, safety_note)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb,$17,$18,$19,$20,$21)
+       on conflict (key) do nothing`,
+      [q[0], q[1], q[2], q[3], q[4], q[5], q[6], q[7], q[8], q[9], q[10], q[11], q[12], q[13], q[14], JSON.stringify(q[15] ?? []), q[16], q[17], q[18], q[19], q[20]],
+    );
+  }
+
+  // Progresso de demonstração coerente com as atividades já semeadas
+  const questIds = {};
+  const questRes = await client.query(`select id, key, target_value, kind, boss_max_hp from quests`);
+  for (const row of questRes.rows) questIds[row.key] = row;
+
+  const demoProgress = [
+    ["ana", "distance-50k-ride", 41200, "in_progress", null, []],
+    ["ana", "climb-300-elev", 300, "unlocked", null, []],
+    ["ana", "boss-colosso-ibirapuera", 1, "in_progress", 2, []],
+    ["ana", "explore-portal-carmo", 0, "completed", null, []],
+    ["bruno", "boss-titan-cantareira", 2, "in_progress", 1, []],
+    ["bruno", "distance-5k-run", 5000, "unlocked", null, []],
+    ["bruno", "route-laco-carmo", 2, "in_progress", null, [0, 1]],
+    ["bruno", "explore-bussola-pinheiros", 0, "completed", null, []],
+    ["carla", "distance-5k-run", 5000, "completed", null, []],
+    ["carla", "climb-300-elev", 180, "in_progress", null, []],
+    ["carla", "explore-portal-carmo", 0, "completed", null, []],
+  ];
+
+  for (const [username, key, progress, state, hp, hits] of demoProgress) {
+    const uid = userIds[username];
+    const q = questIds[key];
+    if (!uid || !q) continue;
+    await client.query(
+      `insert into quest_progress (user_id, quest_id, state, progress, hp, checkpoints_hit, credited_activities, started_at, completed_at)
+       values ($1,$2,$3,$4,$5,$6,$7, now() - interval '6 days', $8)
+       on conflict (user_id, quest_id) do nothing`,
+      [uid, q.id, state, progress, hp, JSON.stringify(hits), JSON.stringify([]), state === "completed" ? new Date() : null],
+    );
+  }
+
   const counts = await client.query(
     `select (select count(*) from users) users, (select count(*) from activities) activities,
             (select count(*) from activity_photos) photos, (select count(*) from territories) territories,

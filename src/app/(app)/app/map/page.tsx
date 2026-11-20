@@ -1,55 +1,55 @@
 import { requireUser } from "@/lib/auth";
 import { AppShell } from "@/components/AppShell";
-import { MapExplorer, type MapSegment, type MapTerritory } from "@/components/MapExplorer";
+import { QuestMap } from "@/components/QuestMap";
 import { segmentsWithStats, territoriesForUser } from "@/lib/data";
+import { loadQuestBoard } from "@/lib/quests";
+import type { MapCircle, MapLine } from "@/components/MapCanvas";
 
 export const dynamic = "force-dynamic";
 
 export default async function MapPage() {
   const user = await requireUser();
-  const [territories, segments] = await Promise.all([territoriesForUser(user.id), segmentsWithStats(user.id)]);
+  const [board, territories, segments] = await Promise.all([
+    loadQuestBoard(user.id, null),
+    territoriesForUser(user.id),
+    segmentsWithStats(user.id),
+  ]);
 
-  const mappedTerritories: MapTerritory[] = territories.map((t) => ({
-    id: t.id,
-    name: t.name,
-    region: t.region,
-    emoji: t.emoji,
-    description: t.description,
-    centerLat: t.centerLat,
-    centerLng: t.centerLng,
+  const territoryCircles: MapCircle[] = territories.map((t) => ({
+    center: [t.centerLng, t.centerLat] as [number, number],
     radiusM: t.radiusM,
-    xpReward: t.xpReward,
-    coinsReward: t.coinsReward,
-    claimed: t.claimed,
-    owners: t.owners,
-    lastOwner: t.lastOwner,
-    myDistanceInsideM: t.myDistanceInsideM,
+    color: t.claimed ? "#d5ff45" : "#6fb6ff",
   }));
 
-  const mappedSegments: MapSegment[] = segments.map((s) => ({
-    id: s.segment.id,
-    name: s.segment.name,
-    sport: s.segment.sport,
-    city: s.segment.city,
-    distanceM: s.segment.distanceM,
-    avgGradePct: s.segment.avgGradePct,
-    startLat: s.segment.startLat,
-    startLng: s.segment.startLng,
-    endLat: s.segment.endLat,
-    endLng: s.segment.endLng,
-    athletes: s.athletes,
-    bestTime: s.bestTime,
-    myBest: s.myBest,
+  const territoryLines: MapLine[] = [];
+  const segmentLines: MapLine[] = segments.map((s) => ({
+    coords: [
+      [s.segment.startLng, s.segment.startLat],
+      [s.segment.endLng, s.segment.endLat],
+    ],
+    color: "#ff6a3d",
+    width: 3,
   }));
 
   return (
     <AppShell
       user={user}
-      title="Mapa"
-      subtitle="Territórios, segmentos e sua posição"
-      right={<span className="metric hidden border border-line px-2 py-1 text-[11px] font-bold text-lime">{territories.filter((t) => t.claimed).length}/{territories.length}</span>}
+      title="Exploração"
+      subtitle="Missões, baús e bosses no território real"
+      right={
+        <span className="metric hidden border border-line px-2 py-1 text-[11px] font-bold text-lime">
+          {board.quests.filter((q) => q.state === "completed").length}/{board.quests.length}
+        </span>
+      }
     >
-      <MapExplorer territories={mappedTerritories} segments={mappedSegments} />
+      <QuestMap
+        initialQuests={board.quests}
+        territories={territoryCircles}
+        territoryLines={territoryLines}
+        segmentLines={segmentLines}
+        ownedTerritories={territories.filter((t) => t.claimed).length}
+        totalTerritories={territories.length}
+      />
     </AppShell>
   );
 }

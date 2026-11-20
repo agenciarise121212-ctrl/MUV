@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { activities, activityPhotos } from "@/db/schema";
 import { requireApiUser } from "@/lib/auth";
 import { processActivity } from "@/lib/gamification";
+import { creditActivityToQuests } from "@/lib/quests";
 import { getSport } from "@/lib/sports";
 
 export const dynamic = "force-dynamic";
@@ -48,6 +49,7 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
   if (body.weather !== undefined) updates.weather = (body.weather ?? "").slice(0, 50) || null;
 
   let summary = null as Awaited<ReturnType<typeof processActivity>> | null;
+  let questEvents: Awaited<ReturnType<typeof creditActivityToQuests>> = [];
   const shouldPublish = Boolean(body.publish) && activity.status === "draft";
   if (shouldPublish) {
     updates.status = "published";
@@ -65,10 +67,13 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
         photosCount: photos.length,
         isNew: true,
       });
+      // Integração RPG: a atividade real credita progresso nas missões compatíveis.
+      // Cada atividade é creditada uma única vez por missão (anti-duplicidade).
+      questEvents = await creditActivityToQuests({ ...user, xp: summary.totalXp, coins: summary.totalCoins }, fresh);
     }
   }
 
-  return Response.json({ ok: true, summary, sport: getSport(activity.sport).label });
+  return Response.json({ ok: true, summary, questEvents, sport: getSport(activity.sport).label });
 }
 
 export async function DELETE(_request: Request, ctx: { params: Promise<{ id: string }> }) {

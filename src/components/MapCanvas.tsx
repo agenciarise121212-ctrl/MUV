@@ -2,16 +2,32 @@
 
 import { useEffect, useRef, useState } from "react";
 import "maplibre-gl/dist/maplibre-gl.css";
+import { EMBLEM_GRID, emblemSource } from "@/lib/emblems";
 import type { GeoJSON } from "geojson";
 import type { GeoJSONSource, Map as MlMap, StyleSpecification } from "maplibre-gl";
 
-export type MapLine = { coords: [number, number][]; color?: string; width?: number };
+export type MapLine = { coords: [number, number][]; color?: string; width?: number; dash?: boolean };
 export type MapCircle = { center: [number, number]; radiusM: number; color?: string; label?: string };
+
+/** Ponto de interesse do mapa renderizado com o brasão 3D correspondente. */
+export type MapEmblem = {
+  id: number;
+  center: [number, number];
+  emblemKey: string;
+  accent: string;
+  /** Destaca visualmente (anel pulsante via camada separada). */
+  highlighted?: boolean;
+  /** Marcadores concluídos ficam atenuados. */
+  dimmed?: boolean;
+};
 
 type Props = {
   lines?: MapLine[];
   circles?: MapCircle[];
   markers?: { center: [number, number]; color?: string; label?: string }[];
+  emblems?: MapEmblem[];
+  /** Raio (km) para agrupar marcadores muito próximos e não poluir o mapa. */
+  clusterEmblems?: boolean;
   userPos?: [number, number] | null;
   accuracyM?: number;
   follow?: boolean;
@@ -22,7 +38,108 @@ type Props = {
   onInteract?: () => void;
   circlesClickable?: boolean;
   onCircleClick?: (index: number) => void;
+  onEmblemClick?: (id: number) => void;
 };
+
+/** Cache local dos recortes da sprite sheet — evita recortar a mesma célula duas vezes. */
+const emblemImageCache = new Map<string, ImageData | null>();
+let spritePromise: Promise<HTMLImageElement | null> | null = null;
+
+function loadSprite(url: string): Promise<HTMLImageElement | null> {
+  if (!spritePromise) {
+    spritePromise = new Promise((resolve) => {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.decoding = "async";
+      img.onload = () => resolve(img);
+      img.onerror = () => resolve(null);
+      img.src = url;
+      window.setTimeout(() => (img.complete ? undefined : resolve(null)), 6000);
+    });
+  }
+  return spritePromise;
+}
+
+/**
+ * Recorta uma célula da sprite sheet em um disco com anel de acento,
+ * devolvendo ImageData pronto para `map.addImage`.
+ */
+async function buildEmblemImage(emblemKey: string, accent: string): Promise<ImageData | null> {
+  const cacheKey = `${emblemKey}|${accent}`;
+  if (emblemImageCache.has(cacheKey)) return emblemImageCache.get(cacheKey) ?? null;
+
+  const { url, row, col, isOverride } = emblemSource(emblemKey);
+  const sprite = await loadSprite(url);
+  const size = 72;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+
+  const radius = size / 2 - 2;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(size / 2, size / 2, radius, 0, Math.PI * 2);
+  ctx.closePath();
+  ctx.clip();
+  ctx.fillStyle = "#0c0d0e";
+  ctx.fillRect(0, 0, size, size);
+
+  if (sprite && !isOverride) {
+    const cellW = sprite.naturalWidth / EMBLEM_GRID.cols;
+    const cellH = sprite.naturalHeight / EMBLEM_GRID.rows;
+    // Inset de 7% para não sangrar arte das células vizinhas.
+    const insetX = cellW * 0.07;
+    const insetY = cellH * 0.07;
+    ctx.drawImage(sprite, col * cellW + insetX, row * cellH + insetY, cellW - insetX * 2, cellH - insetY * 2, 0, 0, size, size);
+  } else if (sprite && isOverride) {
+    const scale = Math.min(size / sprite.naturalWidth, size / sprite.naturalHeight);
+    const w = sprite.naturalWidth * scale;
+    const h = sprite.naturalHeight * scale;
+    ctx.drawImage(sprite, (size - w) / 2, (size - h) / 2, w, h);
+  } else {
+    ctx.fillStyle = accent;
+    ctx.beginPath();
+    ctx.arc(size / 2, size / 2, radius * 0.34, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+
+  ctx.beginPath();
+  ctx.arc(size / 2, size / 2, radius - 1, 0, Math.PI * 2);
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = accent;
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(size / 2, size / 2, radius + 1.5, 0, Math.PI * 2);
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = "rgba(16,17,18,0.9)";
+  ctx.stroke();
+
+  let data: ImageData | null = null;
+  try {
+    data = ctx.getImageData(0, 0, size, size);
+  } catch {
+    // Canvas contaminado (CDN sem CORS): cai para um disco colorido com o anel de acento.
+    ctx.clearRect(0, 0, size, size);
+    ctx.fillStyle = "#191b1e";
+    ctx.beginPath();
+    ctx.arc(size / 2, size / 2, radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = accent;
+    ctx.beginPath();
+    ctx.arc(size / 2, size / 2, radius * 0.42, 0, Math.PI * 2);
+    ctx.fill();
+    try {
+      data = ctx.getImageData(0, 0, size, size);
+    } catch {
+      return null;
+    }
+  }
+  emblemImageCache.set(cacheKey, data);
+  return data;
+}
 
 const TILES: Record<"dark" | "voyager", string> = {
   dark: "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
@@ -47,10 +164,23 @@ function featureCollection(features: GeoJSON.Feature[]): GeoJSON.FeatureCollecti
   return { type: "FeatureCollection", features };
 }
 
+/** Registra as imagens dos brasões usados pelos marcadores atuais (com cache). */
+async function registerEmblemImages(map: MlMap, emblems: MapEmblem[]) {
+  const wanted = new Map<string, string>();
+  for (const e of emblems) if (!wanted.has(e.emblemKey)) wanted.set(e.emblemKey, e.accent);
+  for (const [key, accent] of wanted) {
+    if (map.hasImage(key)) continue;
+    const data = await buildEmblemImage(key, accent);
+    if (data) map.addImage(key, data, { pixelRatio: 1 });
+  }
+}
+
 export default function MapCanvas({
   lines = [],
   circles = [],
   markers = [],
+  emblems = [],
+  clusterEmblems = false,
   userPos = null,
   follow = false,
   interactive = true,
@@ -60,6 +190,7 @@ export default function MapCanvas({
   onInteract,
   circlesClickable = false,
   onCircleClick,
+  onEmblemClick,
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MlMap | null>(null);
@@ -143,6 +274,61 @@ export default function MapCanvas({
             "circle-stroke-color": "#05070b",
           },
         });
+        map.addSource("muv-emblems", {
+          type: "geojson",
+          data: featureCollection([]),
+          cluster: clusterEmblems,
+          clusterRadius: 46,
+          clusterMaxZoom: 14,
+        });
+        map.addLayer({
+          id: "emblem-cluster",
+          type: "circle",
+          source: "muv-emblems",
+          filter: ["has", "point_count"],
+          paint: {
+            "circle-color": "#191b1e",
+            "circle-radius": 17,
+            "circle-stroke-width": 2,
+            "circle-stroke-color": "#858b94",
+          },
+        });
+        map.addLayer({
+          id: "emblem-cluster-count",
+          type: "symbol",
+          source: "muv-emblems",
+          filter: ["has", "point_count"],
+          layout: {
+            "text-field": ["get", "point_count_abbreviated"],
+            "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
+            "text-size": 12,
+          },
+          paint: { "text-color": "#f5f5f2" },
+        });
+        map.addLayer({
+          id: "emblem-halo",
+          type: "circle",
+          source: "muv-emblems",
+          filter: ["all", ["!", ["has", "point_count"]], ["==", ["get", "hi"], true]],
+          paint: {
+            "circle-color": ["get", "a"],
+            "circle-radius": 21,
+            "circle-opacity": 0.22,
+            "circle-blur": 0.7,
+          },
+        });
+        map.addLayer({
+          id: "emblem-icon",
+          type: "symbol",
+          source: "muv-emblems",
+          filter: ["!", ["has", "point_count"]],
+          layout: {
+            "icon-image": ["get", "img"],
+            "icon-size": ["case", ["==", ["get", "hi"], true], 1.18, 1],
+            "icon-allow-overlap": true,
+            "icon-ignore-placement": true,
+          },
+        });
         setReady(true);
       });
       if (interactive) {
@@ -155,7 +341,15 @@ export default function MapCanvas({
         map.on("click", (event) => {
           const layers = map.queryRenderedFeatures(event.point, { layers: ["area-fill"] });
           const hit = layers.find((f) => typeof f.properties?.["__index"] === "number");
-          if (hit) onCircleClick?.(Number(hit.properties["__index"]));
+          if (hit) {
+            onCircleClick?.(Number(hit.properties["__index"]));
+            return;
+          }
+          const emblemLayers = map.queryRenderedFeatures(event.point, {
+            layers: ["emblem-icon", "emblem-halo"],
+          });
+          const emblem = emblemLayers.find((f) => typeof f.properties?.["qid"] === "number");
+          if (emblem) onEmblemClick?.(Number(emblem.properties["qid"]));
         });
       }
     }
@@ -175,7 +369,7 @@ export default function MapCanvas({
       .filter((l) => l.coords.length > 1)
       .map((l) => ({
         type: "Feature" as const,
-        properties: { c: l.color ?? "#d5ff45", w: l.width ?? 5 },
+        properties: { c: l.color ?? "#d5ff45", w: l.width ?? 5, dash: Boolean(l.dash) },
         geometry: { type: "LineString" as const, coordinates: l.coords },
       }));
     const areaFeatures = circles.map((c, index) => ({
@@ -188,6 +382,18 @@ export default function MapCanvas({
       properties: { c: m.color ?? "#ffffff" },
       geometry: { type: "Point" as const, coordinates: m.center },
     }));
+    void registerEmblemImages(map, emblems);
+    const emblemFeatures = emblems.map((e) => ({
+      type: "Feature" as const,
+      properties: { qid: e.id, img: e.emblemKey, a: e.accent, hi: Boolean(e.highlighted), dim: Boolean(e.dimmed) },
+      geometry: { type: "Point" as const, coordinates: e.center },
+    }));
+    const emblemSource = map.getSource("muv-emblems") as GeoJSONSource | undefined;
+    if (emblemSource) {
+      emblemSource.setData(featureCollection(emblemFeatures));
+      emblemSource.setClusterOptions?.({ cluster: clusterEmblems, clusterRadius: 46 });
+    }
+
     (map.getSource("muv-lines") as GeoJSONSource | undefined)?.setData(featureCollection(lineFeatures));
     (map.getSource("muv-areas") as GeoJSONSource | undefined)?.setData(featureCollection(areaFeatures));
     (map.getSource("muv-pins") as GeoJSONSource | undefined)?.setData(featureCollection(pinFeatures));
@@ -197,6 +403,7 @@ export default function MapCanvas({
         ...lines.flatMap((l) => l.coords),
         ...circles.map((c) => c.center),
         ...markers.map((m) => m.center),
+        ...emblems.map((e) => e.center),
       ];
       if (all.length > 1) {
         const lons = all.map((p) => p[0]);
@@ -210,7 +417,7 @@ export default function MapCanvas({
         );
       }
     }
-  }, [lines, circles, markers, ready, autoFit]);
+  }, [lines, circles, markers, emblems, ready, autoFit]);
 
   useEffect(() => {
     const map = mapRef.current;
