@@ -93,22 +93,22 @@ export type FeedItem = {
 };
 
 export async function feedForUser(currentUserId: number, scope: "following" | "me" | "global", limit = 20): Promise<FeedItem[]> {
-  let where = and(eq(activities.status, "published"), eq(activities.visibility, "public"));
+  let where = and(eq(activities.status, "published"), eq(activities.blockedFromRanking, false), eq(activities.visibility, "public"));
   if (scope === "me") {
-    where = and(eq(activities.userId, currentUserId), eq(activities.status, "published"));
+    where = and(eq(activities.userId, currentUserId), eq(activities.status, "published"), eq(activities.blockedFromRanking, false));
   } else if (scope === "following") {
     const following = await db
       .select({ id: follows.followingId })
       .from(follows)
       .where(eq(follows.followerId, currentUserId));
     const ids = following.map((f) => f.id).concat(currentUserId);
-    where = and(eq(activities.status, "published"), inArray(activities.userId, ids));
+    where = and(eq(activities.status, "published"), eq(activities.blockedFromRanking, false), inArray(activities.userId, ids));
   }
   return queryFeed(where, currentUserId, limit);
 }
 
 export async function userActivities(userId: number, currentUserId: number, opts: { sport?: string; category?: string; limit?: number } = {}): Promise<FeedItem[]> {
-  const conditions = [eq(activities.userId, userId), eq(activities.status, "published")];
+  const conditions = [eq(activities.userId, userId), eq(activities.status, "published"), eq(activities.blockedFromRanking, false)];
   if (opts.sport) conditions.push(eq(activities.sport, opts.sport));
   const rows = await db
     .select(activityColumns)
@@ -303,7 +303,7 @@ export async function userStats(userId: number) {
       bestPace: sql<number>`coalesce(min(nullif(${activities.paceSecPerKm}, 0)), 0)::float`,
     })
     .from(activities)
-    .where(and(eq(activities.userId, userId), eq(activities.status, "published")))
+    .where(and(eq(activities.userId, userId), eq(activities.status, "published"), eq(activities.blockedFromRanking, false)))
     .groupBy(activities.sport);
   return rows;
 }
@@ -498,8 +498,8 @@ export async function suggestedAthletes(userId: number, limit = 6) {
       username: users.username,
       avatarColor: users.avatarColor,
       city: users.city,
-      activities: sql<number>`(select count(*)::int from activities a where a.user_id = users.id and a.status = 'published')`,
-      distanceM: sql<number>`coalesce((select sum(a.distance_m) from activities a where a.user_id = users.id and a.status = 'published'), 0)::float`,
+      activities: sql<number>`(select count(*)::int from activities a where a.user_id = users.id and a.status = 'published' and a.blocked_from_ranking = false)`,
+      distanceM: sql<number>`coalesce((select sum(a.distance_m) from activities a where a.user_id = users.id and a.status = 'published' and a.blocked_from_ranking = false), 0)::float`,
     })
     .from(users)
     .orderBy(desc(users.xp))
@@ -534,7 +534,7 @@ export async function recentPublicActivities(limit = 12) {
     .select(activityColumns)
     .from(activities)
     .innerJoin(users, eq(users.id, activities.userId))
-    .where(and(eq(activities.status, "published"), or(eq(activities.visibility, "public"), eq(activities.visibility, "followers"))))
+    .where(and(eq(activities.status, "published"), eq(activities.blockedFromRanking, false), or(eq(activities.visibility, "public"), eq(activities.visibility, "followers"))))
     .orderBy(desc(activities.startedAt))
     .limit(limit);
 }

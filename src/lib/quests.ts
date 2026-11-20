@@ -18,6 +18,16 @@ import { elevationStats, haversine, totalDistance } from "@/lib/geo";
 import { categoryAccent, categoryEmblem, type QuestCategory } from "@/lib/emblems";
 import { levelFromXp } from "@/lib/levels";
 import {
+  RINGS,
+  TIER_REWARD,
+  anchorRoadPoints,
+  fallbackRoadPoints,
+  pickRoadPointInRing,
+  ringForDistance,
+  type RoadPoint,
+  type RingTier,
+} from "@/lib/roads";
+import {
   DIFFICULTY_META,
   KIND_LABEL,
   QUEST_STAT_LABEL,
@@ -29,7 +39,7 @@ import {
   gpsReadiness,
   isStationary,
   distanceToQuest,
-  questProgressLabel,
+  toQuestView,
   type QuestDifficulty,
   type QuestKind,
   type QuestView,
@@ -96,70 +106,7 @@ export function validateRoute(
 /* ------------------------------ Leitura de dados ------------------------------ */
 
 
-function toView(
-  quest: Quest,
-  progress: { state: string; progress: number; hp: number | null; checkpointsHit: number[]; paused: boolean } | undefined,
-  position: { lat: number; lng: number; accuracyM?: number | null; speedKmh?: number | null } | null,
-): QuestView {
-  const kind = quest.kind as QuestKind;
-  const category = quest.category as QuestCategory;
-  const difficulty = quest.difficulty as QuestDifficulty;
-  const state = (progress?.state ?? "available") as QuestView["state"];
-  const dist = position && typeof quest.lat === "number" ? distanceToQuest(quest, position.lat, position.lng) : null;
-  const inRange = dist !== null && dist <= effectiveRadius(quest, position?.accuracyM ?? null);
-  const accuracyOkFlag = accuracyOk(position?.accuracyM ?? null);
-
-  let capturable = false;
-  let blockedReason: string | null = null;
-
-  if (state !== "completed" && quest.lat !== null) {
-    if (!accuracyOkFlag) {
-      blockedReason = "Sinal de GPS impreciso — aproxime-se em céu aberto para validar presença.";
-    } else if (!inRange) {
-      blockedReason = `Aproxime-se: faltam ${Math.max(0, Math.round((dist ?? 0) - effectiveRadius(quest, position?.accuracyM ?? null)))} m.`;
-    } else if (position?.speedKmh != null && !isStationary(position.speedKmh)) {
-      blockedReason = "Você está em movimento. Pare com segurança para interagir.";
-    } else {
-      capturable = true;
-    }
-  }
-
-  return {
-    id: quest.id,
-    key: quest.key,
-    name: quest.name,
-    description: quest.description,
-    kind,
-    kindLabel: KIND_LABEL[kind] ?? "Missão",
-    category,
-    difficulty,
-    difficultyLabel: DIFFICULTY_META[difficulty]?.label ?? "Média",
-    accent: categoryAccent(category, kind),
-    emblem: categoryEmblem(category, kind),
-    sport: quest.sport,
-    lat: quest.lat,
-    lng: quest.lng,
-    radiusM: quest.radiusM,
-    targetValue: quest.targetValue,
-    unit: quest.unit,
-    xpReward: quest.xpReward,
-    coinsReward: quest.coinsReward,
-    waypoints: quest.waypoints ?? [],
-    bossKind: quest.bossKind,
-    bossMaxHp: quest.bossMaxHp,
-    origin: quest.origin,
-    verified: quest.verified,
-    safetyNote: quest.safetyNote,
-    state,
-    progress: progress?.progress ?? 0,
-    hp: progress?.hp ?? (quest.bossMaxHp > 0 ? quest.bossMaxHp : null),
-    checkpointsHit: progress?.checkpointsHit ?? [],
-    paused: progress?.paused ?? false,
-    distanceM: dist,
-    capturable,
-    blockedReason,
-  };
-}
+const toView = toQuestView;
 
 export type QuestEvent =
   | { type: "near"; questId: number; name: string; emblem: string; distanceM: number; accent: string }
@@ -497,204 +444,490 @@ type GenInput = {
   favoriteKind: "ride" | "run" | "walk";
 };
 
-const DIFFICULTY_BY_LEVEL: QuestDifficulty[] = ["facil", "media", "media", "dificil", "dificil", "lendaria"];
+type GenResult = { created: number; guarded: number; source: string; degraded: boolean; specialSpawned: boolean };
 
-function pickDifficulty(level: number): QuestDifficulty {
-  return DIFFICULTY_BY_LEVEL[Math.min(DIFFICULTY_BY_LEVEL.length - 1, Math.max(0, level - 1))];
+/** Prefixo de chave das missões dinâmicas — usado para rotação. */
+const DYN_PREFIX = "dyn-";
+/** Número máximo de objetivos dinâmicos vivos por atleta. */
+const MAX_DYNAMIC_ALIVE = 14;
+/** Prazo padrão de rotação dos objetivos (horas). */
+const ROTATION_HOURS = 24;
+/** Prazo dos bosses especiais (horas). */
+const SPECIAL_BOSS_HOURS = 6;
+
+const EASY_BOSS_NAMES = [
+  { name: "GUARDIÃO · Trilha Fácil", desc: "Um guardião novato patrulha esta via. Vence com um treino curto real e capture no local.", kind: "endurance" as const, hp: 1, target: 4000, emblem: "boss-golem" },
+  { name: "SENTINELA · Estrada Vicinal", desc: "Sentinela de estrada vicinal. Complete uma atividade de 5 km para enfraquecê-lo e capture presencialmente.", kind: "endurance" as const, hp: 2, target: 5000, emblem: "boss-golem" },
+  { name: "VIGIA · Rota Urbana", desc: "Vigia das ruas urbanas. Um pedal de 4 km tira seu HP e libera a captura.", kind: "endurance" as const, hp: 1, target: 4000, emblem: "boss-golem" },
+  { name: "RASTREADOR · Ciclovia", desc: "Rastreador da ciclovia. Derrote com 3 km reais e capture no ponto marcado.", kind: "endurance" as const, hp: 2, target: 3000, emblem: "boss-golem" },
+];
+
+const SPECIAL_BOSS_NAMES = [
+  { name: "TITÃ · Soberano da Serra", desc: "Boss especial invocado pelo seu desempenho. Exige ganho de elevação real e captura presencial no local.", kind: "climb" as const, hp: 3, target: 400, emblem: "boss-golem", bossKind: "climb" },
+  { name: "COLOSSO · Rei da Resistência", desc: "Boss especial de resistência. Uma atividade longa real derruba seu HP por completo.", kind: "endurance" as const, hp: 4, target: 15000, emblem: "boss-golem", bossKind: "legendary" },
+  { name: "FÊNIX · Guardiã do Portal", desc: "Boss especial de exploração, disponível por tempo limitado. Registre trajeto real e capture no local.", kind: "exploration" as const, hp: 2, target: 0, emblem: "portal-blue", bossKind: "exploration" },
+  { name: "LEVIATÃ · Dominador de Distância", desc: "Boss especial lendário. Exige 20 km acumulados em atividades reais.", kind: "endurance" as const, hp: 5, target: 20000, emblem: "boss-golem", bossKind: "endurance" },
+];
+
+const COLLECTIBLE_NAMES = [
+  { name: "Baú de recompensa", desc: "Baú ancorado em via pública real. Chegue ao raio de ativação e capture presencialmente.", kind: "collectible" as const, category: "chest" as const, emblem: "chest-gold" },
+  { name: "Cristal secreto", desc: "Cristal raro escondido em um caminho público. Capture no local com o GPS do dispositivo.", kind: "secret" as const, category: "secret" as const, emblem: "crystal-purple" },
+  { name: "Impulso de energia", desc: "Item de energia ancorado em via real. Capture presencialmente para somar ao inventário.", kind: "collectible" as const, category: "chest" as const, emblem: "potion-lightning" },
+  { name: "Medalha de pedal", desc: "Medalha ancorada em via pública. Capture no local para registrar na coleção.", kind: "collectible" as const, category: "special" as const, emblem: "medal-bike" },
+  { name: "Troféu de conquista", desc: "Troféu raro em caminho público. Recompensa elevada para longa distância.", kind: "collectible" as const, category: "special" as const, emblem: "trophy-gold" },
+];
+
+const ROUTE_NAMES = [
+  { name: "Desafio de rota · Bandeirada", desc: "Ponto de chegada em via pública real. Chegue ao raio de ativação para validar.", emblem: "flag-checkered-flame", kind: "exploration" as const, category: "checkpoint" as const },
+  { name: "Missão de trilha · Emblema MTB", desc: "Trecho de trilha cadastrado no OpenStreetMap. Registre presença no local.", emblem: "badge-mtb-trail", kind: "trail" as const, category: "mission" as const },
+  { name: "Rota de montanha · Pino", desc: "Objetivo de subida ancorado em via real de montanha.", emblem: "mountain-route-pin", kind: "climb" as const, category: "mission" as const },
+  { name: "Alvo de distância · Marco", desc: "Marco de distância em via pública. Alcance o ponto para concluir.", emblem: "target-red", kind: "exploration" as const, category: "mission" as const },
+  { name: "Bandeira de trilha · Marco inicial", desc: "Marco inicial de trilha em caminho público cadastrado.", emblem: "flag-bike-mountain", kind: "exploration" as const, category: "mission" as const },
+];
+
+function expiresAt(hours: number): Date {
+  return new Date(Date.now() + hours * 3600000);
+}
+
+/** Janela de rotação (24h em UTC): estável dentro da janela, muda entre janelas. */
+function rotationStamp(): string {
+  return new Date().toISOString().slice(0, 13).replace(/[-:T]/g, "");
+}
+
+function scaleReward(tier: RingTier, base: number): { xp: number; coins: number } {
+  const meta = TIER_REWARD[tier];
+  return {
+    xp: Math.round(base * meta.multiplier),
+    coins: Math.max(10, Math.round((base / 10) * meta.multiplier)),
+  };
+}
+
+function pickVariety<T>(list: T[], used: Set<string>, keyOf: (item: T) => string): T | null {
+  const free = list.filter((item) => !used.has(keyOf(item)));
+  if (free.length === 0) return null;
+  const chosen = free[used.size % free.length];
+  used.add(keyOf(chosen));
+  return chosen;
 }
 
 /**
- * Gera missões a partir de dados reais: territórios cadastrados, segmentos
- * registrados pela comunidade e pontos do histórico do próprio atleta.
- * Nunca usa coordenadas aleatórias — e protege a localização residencial.
+ * Desativa objetivos dinâmicos expirados ou concluídos há mais de um ciclo,
+ * liberando espaço para a próxima rotação em locais diferentes.
  */
-export async function generateDynamicQuests(user: User, input: GenInput, limit = 4): Promise<{ created: number; guarded: number }> {
-  const existing = await db.select({ key: quests.key }).from(quests);
-  const known = new Set(existing.map((e) => e.key));
+export async function rotateQuests(userId: number): Promise<{ deactivated: number }> {
+  const now = new Date();
+  const stale = new Date(now.getTime() - 48 * 3600000);
+
+  // Expirados por tempo (bosses especiais e objetivos com prazo).
+  const expired = await db
+    .update(quests)
+    .set({ isActive: false })
+    .where(
+      and(
+        eq(quests.isActive, true),
+        sql`${quests.origin} = 'dynamic'`,
+        sql`${quests.expiresAt} is not null and ${quests.expiresAt} < ${now.toISOString()}::timestamptz`,
+      ),
+    )
+    .returning({ id: quests.id });
+
+  // Concluídos: saem do mapa para abrir espaço.
+  const finished = await db
+    .update(quests)
+    .set({ isActive: false })
+    .where(
+      and(
+        eq(quests.isActive, true),
+        sql`${quests.origin} = 'dynamic'`,
+        sql`exists (select 1 from quest_progress qp where qp.quest_id = ${quests.id} and qp.user_id = ${userId} and qp.state = 'completed')`,
+      ),
+    )
+    .returning({ id: quests.id });
+
+  // Antigos sem prazo: rotação por idade.
+  const staleRows = await db
+    .update(quests)
+    .set({ isActive: false })
+    .where(
+      and(
+        eq(quests.isActive, true),
+        sql`${quests.origin} = 'dynamic'`,
+        sql`${quests.expiresAt} is null`,
+        sql`${quests.spawnedAt} is not null and ${quests.spawnedAt} < ${stale.toISOString()}::timestamptz`,
+      ),
+    )
+    .returning({ id: quests.id });
+
+  return { deactivated: expired.length + finished.length + staleRows.length };
+}
+
+/** Quantos desafios o atleta já concluiu (base para invocar bosses especiais). */
+async function completedCount(userId: number): Promise<number> {
+  const [row] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(questProgress)
+    .where(and(eq(questProgress.userId, userId), sql`${questProgress.state} = 'completed'`));
+  return row?.n ?? 0;
+}
+
+async function dynamicAlive(userId: number): Promise<number> {
+  const [row] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(quests)
+    .where(and(eq(quests.isActive, true), sql`${quests.origin} = 'dynamic'`));
+  return row?.n ?? 0;
+}
+
+/** Boss especial já invocado e ainda no prazo. */
+async function activeSpecialBoss(userId: number): Promise<boolean> {
+  const [row] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(quests)
+    .where(
+      and(
+        eq(quests.isActive, true),
+        eq(quests.isSpecial, true),
+        sql`${quests.expiresAt} is not null and ${quests.expiresAt} > now()`,
+        sql`not exists (select 1 from quest_progress qp where qp.quest_id = ${quests.id} and qp.user_id = ${userId} and qp.state = 'completed')`,
+      ),
+    );
+  return (row?.n ?? 0) > 0;
+}
+
+/**
+ * Gera objetivos dinâmicos ancorados em vias públicas reais (OpenStreetMap).
+ * Nunca usa coordenadas sorteadas: cada ponto vem de uma via do OSM ou,
+ * no fallback, de âncoras públicas já cadastradas.
+ */
+export async function generateDynamicQuests(user: User, input: GenInput, limit = 6): Promise<GenResult> {
+  await rotateQuests(user.id);
+
+  // A deduplicação considera apenas objetivos ATIVOS: os desativados pela
+  // rotação já saíram do mapa e podem renascer em outro local.
+  const known = new Set(
+    (
+      await db
+        .select({ key: quests.key })
+        .from(quests)
+        .where(and(eq(quests.isActive, true), sql`${quests.origin} = 'dynamic'`))
+    ).map((r) => r.key),
+  );
+  // Janela de rotação: objetivos criados na mesma janela compartilham identidade
+  // (regeneração é idempotente). Após a janela virar, a chave muda e o objetivo
+  // nasce em outro lugar.
+  const epoch = rotationStamp();
   const allTerritories = await db.select().from(territories);
   const allSegments = await db.select().from(segments);
 
+  const anchors = [
+    ...allTerritories.map((t) => ({ lat: t.centerLat, lng: t.centerLng, name: t.name, radiusM: t.radiusM })),
+    ...allSegments.map((s) => ({ lat: s.startLat, lng: s.startLng, name: s.name, radiusM: 150 })),
+  ];
+
+  const anchor = await anchorRoadPoints(
+    { lat: input.lat, lng: input.lng },
+    { radiusM: 16000, timeoutMs: 6500, anchors },
+  );
+  const roads = anchor.points;
+  if (roads.length === 0) return { created: 0, guarded: 0, source: anchor.source, degraded: anchor.degraded, specialSpawned: false };
+
+  // Proteção de privacidade: base residencial inferida nunca recebe objetivo.
   const recent = await db
-    .select({ id: activities.id, track: activities.track, startedAt: activities.startedAt, sport: activities.sport })
+    .select({ track: activities.track })
     .from(activities)
     .where(and(eq(activities.userId, user.id), eq(activities.status, "published")))
     .orderBy(sql`${activities.startedAt} desc`)
     .limit(12);
-
-  // Proteção de privacidade: o ponto de partida mais recorrente é tratado como
-  // residência/base e jamais recebe objetivo.
   const starts: { lat: number; lng: number }[] = [];
-  const candidatePoints: { lat: number; lng: number; alt?: number }[] = [];
   for (const a of recent) {
     const track = (a.track ?? []) as TrackPoint[];
     if (track.length > 10) starts.push({ lat: track[0].lat, lng: track[0].lng });
-    const stride = Math.max(1, Math.floor(track.length / 40));
-    for (let i = 0; i < track.length; i += stride) candidatePoints.push({ lat: track[i].lat, lng: track[i].lng, alt: track[i].alt });
   }
   const homeBase = clusterCenter(starts);
-  const isPrivate = (lat: number, lng: number) => (homeBase ? haversine(lat, lng, homeBase.lat, homeBase.lng) < 400 : false);
+  const isPrivate = (lat: number, lng: number) => (homeBase ? haversine(lat, lng, homeBase.lat, homeBase.lng) < 350 : false);
 
-  const difficulty = pickDifficulty(input.level);
+  const usedRoads = new Set<string>();
+  const usedVariety = new Set<string>();
   const inserts: (typeof quests.$inferInsert)[] = [];
   let guarded = 0;
+  const nowIso = new Date();
 
   const push = (row: (typeof quests.$inferInsert) & { key: string }) => {
-    if (known.has(row.key)) return;
+    if (known.has(row.key)) return false;
+    if (isPrivate(row.lat ?? 0, row.lng ?? 0)) {
+      guarded += 1;
+      return false;
+    }
     known.add(row.key);
     inserts.push(row);
+    return true;
   };
 
-  // 1) Missões de exploração ancoradas em territórios reais conhecidos.
-  const nearTerritories = [...allTerritories]
-    .map((t) => ({ t, d: haversine(input.lat, input.lng, t.centerLat, t.centerLng) }))
-    .sort((a, b) => a.d - b.d)
-    .slice(0, 3);
+  const roadTag = (p: RoadPoint | null) => (p ? (p.name ?? `${p.lat.toFixed(4)},${p.lng.toFixed(4)}`) : "sem-via");
+  const roadSourceNote =
+    anchor.source === "overpass"
+      ? "Ponto ancorado em via pública do OpenStreetMap."
+      : anchor.source === "fallback"
+        ? "Ponto em área pública conhecida — percurso precisa ser verificado no local."
+        : "Percurso precisa ser verificado no local.";
 
-  for (const { t } of nearTerritories) {
-    // Offset determinístico dentro do território (borda), nunca no centro exato.
-    const angle = (t.id * 137) % 360;
-    const rad = (angle * Math.PI) / 180;
-    const offsetM = Math.max(180, t.radiusM * 0.55);
-    const lat = t.centerLat + (Math.cos(rad) * offsetM) / 110540;
-    const lng = t.centerLng + (Math.sin(rad) * offsetM) / (111320 * Math.cos((t.centerLat * Math.PI) / 180));
-    if (isPrivate(lat, lng)) {
-      guarded += 1;
-      continue;
-    }
+  /* -------- 1) Desafios por anel de distância, com recompensa escalonada -------- */
+  for (const ring of RINGS) {
+    const point = pickRoadPointInRing({ lat: input.lat, lng: input.lng }, roads, ring, usedRoads);
+    if (!point) continue;
+    const template = pickVariety(ROUTE_NAMES, usedVariety, (t) => t.name);
+    if (!template) continue;
+    const realDistance = haversine(input.lat, input.lng, point.lat, point.lng);
+    const tier = ringForDistance(realDistance);
+    const reward = scaleReward(tier, 140);
+    const difficulty: QuestDifficulty = tier === "longo" ? "dificil" : tier === "medio" ? "media" : "facil";
+    const slug = point.name ? point.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 26) : "via";
     push({
-      key: `dyn-explore-${t.id}-${user.id}`,
-      name: `Exploração · ${t.name}`,
-      description: `Chegue ao ponto marcado dentro de ${t.name} e registre presença com o GPS do dispositivo.`,
-      kind: "exploration",
-      category: "explore",
+      key: `dyn-route-${epoch}-${slug}-${point.lat.toFixed(4)}`,
+      name: `${template.name} · ${point.name ?? "Via pública"}`,
+      description: `${template.desc} ${roadSourceNote}`,
+      kind: template.kind,
+      category: template.category,
       difficulty,
-      emblemKey: "portal-blue",
-      lat,
-      lng,
+      emblemKey: template.emblem,
+      sport: input.favoriteKind === "ride" ? "ride" : input.favoriteKind,
+      lat: point.lat,
+      lng: point.lng,
       radiusM: 45,
-      targetValue: 0,
-      unit: "m",
-      xpReward: 120 + t.xpReward / 2,
-      coinsReward: 12,
+      targetValue: template.kind === "climb" ? Math.max(60, Math.round(input.totalElev * 0.08)) : 0,
+      unit: template.kind === "climb" ? "m_elev" : "m",
+      xpReward: reward.xp,
+      coinsReward: reward.coins,
       origin: "dynamic",
-      verified: false,
-      safetyNote: "Percurso precisa ser verificado no local. Respeite horários e regras do parque.",
+      tier,
+      roadName: point.name,
+      roadType: point.highway,
+      verified: anchor.source === "overpass" && point.safe,
+      safetyNote: point.safe ? roadSourceNote : "Via de tráfego rápido: interaja somente parado e fora da pista.",
+      spawnedAt: nowIso,
+      expiresAt: expiresAt(ROTATION_HOURS),
     });
   }
 
-  // 2) Missão de distância dimensionada pelo nível e pelo volume real do atleta.
-  const distanceTarget = Math.round((input.favoriteKind === "ride" ? 8000 : 3000) * (1 + input.level * 0.25));
-  push({
-    key: `dyn-distance-${user.id}-${distanceTarget}`,
-    name: `Desafio de distância · ${(distanceTarget / 1000).toFixed(0)} km`,
-    description: `Acumule ${(distanceTarget / 1000).toFixed(0)} km em atividades reais registradas pelo GPS. Progresso contado uma única vez por atividade.`,
-    kind: "distance",
-    category: "mission",
-    difficulty,
-    emblemKey: "target-red",
-    lat: null,
-    lng: null,
-    radiusM: 45,
-    targetValue: distanceTarget,
-    unit: "m",
-    xpReward: 150 + Math.round(distanceTarget / 100),
-    coinsReward: 15,
-    origin: "dynamic",
-    verified: true,
-    safetyNote: "Progresso conta somente atividades publicadas com trilha válida.",
-  });
-
-  // 3) Missão de subida quando o atleta já tem volume de ganho.
-  if (input.totalElev > 300) {
-    const climbTarget = Math.min(1500, Math.max(200, Math.round(input.totalElev * 0.25)));
+  /* -------- 2) Colecionáveis escalonados por distância -------- */
+  for (const ring of RINGS) {
+    const point = pickRoadPointInRing({ lat: input.lat, lng: input.lng }, roads, ring, usedRoads);
+    if (!point) continue;
+    const template = pickVariety(COLLECTIBLE_NAMES, usedVariety, (t) => t.name);
+    if (!template) continue;
+    const realDistance = haversine(input.lat, input.lng, point.lat, point.lng);
+    const tier = ringForDistance(realDistance);
+    const reward = scaleReward(tier, 180);
+    const difficulty: QuestDifficulty = tier === "longo" ? "lendaria" : tier === "medio" ? "dificil" : "media";
+    const slug = point.name ? point.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 26) : "via";
     push({
-      key: `dyn-climb-${user.id}-${climbTarget}`,
-      name: `Missão de subida · ${climbTarget} m`,
-      description: `Acumule ${climbTarget} m de ganho de elevação em subidas reais registradas pelo altímetro do dispositivo.`,
-      kind: "climb",
-      category: "special",
+      key: `dyn-collect-${epoch}-${slug}-${point.lat.toFixed(4)}`,
+      name: `${template.name}${tier === "longo" ? " raro" : ""}`,
+      description: `${template.desc} ${roadSourceNote}`,
+      kind: template.kind,
+      category: template.category,
       difficulty,
-      emblemKey: "mountain-route-pin",
-      lat: null,
-      lng: null,
-      radiusM: 45,
-      targetValue: climbTarget,
-      unit: "m_elev",
-      xpReward: 200 + Math.round(climbTarget / 3),
-      coinsReward: 20,
-      origin: "dynamic",
-      verified: true,
-      safetyNote: "Escolha subidas conhecidas e evite trechos com trânsito rápido.",
-    });
-  }
-
-  // 4) Baú de colecionável posicionado em ponto real do histórico (fora da base).
-  const chestCandidate = candidatePoints
-    .filter((p) => !isPrivate(p.lat, p.lng))
-    .find((p) => haversine(input.lat, input.lng, p.lat, p.lng) > 1200);
-  if (chestCandidate) {
-    push({
-      key: `dyn-chest-${user.id}-${chestCandidate.lat.toFixed(4)}`,
-      name: "Baú de recompensa",
-      description: "Um baú aparece em um ponto por onde você já passou. Chegue ao local e capture o prêmio presencialmente.",
-      kind: "collectible",
-      category: "chest",
-      difficulty,
-      emblemKey: "chest-gold",
-      lat: chestCandidate.lat,
-      lng: chestCandidate.lng,
+      emblemKey: template.emblem,
+      sport: null,
+      lat: point.lat,
+      lng: point.lng,
       radiusM: 40,
       targetValue: 0,
       unit: "m",
-      xpReward: 180,
-      coinsReward: 25,
+      xpReward: reward.xp,
+      coinsReward: reward.coins,
       origin: "dynamic",
-      verified: false,
-      safetyNote: "Percurso precisa ser verificado no local.",
+      tier,
+      roadName: point.name,
+      roadType: point.highway,
+      verified: anchor.source === "overpass" && point.safe,
+      safetyNote: point.safe ? roadSourceNote : "Via de tráfego rápido: capture somente parado, fora da pista.",
+      spawnedAt: nowIso,
+      expiresAt: expiresAt(ROTATION_HOURS),
     });
-    guarded += 0;
   }
 
-  // 5) Missão secreta em ponto de segmento real da comunidade.
-  const secretSegment = allSegments.find((s) => haversine(input.lat, input.lng, s.startLat, s.startLng) > 1500);
-  if (secretSegment) {
+  /* -------- 3) Bosses comuns (fáceis) sempre presentes -------- */
+  const aliveEasyBosses = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(quests)
+    .where(
+      and(
+        eq(quests.isActive, true),
+        eq(quests.kind, "boss"),
+        eq(quests.isSpecial, false),
+        sql`${quests.origin} = 'dynamic'`,
+        sql`not exists (select 1 from quest_progress qp where qp.quest_id = ${quests.id} and qp.user_id = ${user.id} and qp.state = 'completed')`,
+      ),
+    );
+  const needEasy = Math.max(0, 2 - (aliveEasyBosses[0]?.n ?? 0));
+  for (let i = 0; i < needEasy; i += 1) {
+    const ring = i === 0 ? RINGS[0] : RINGS[1];
+    const point = pickRoadPointInRing({ lat: input.lat, lng: input.lng }, roads, ring, usedRoads);
+    if (!point) continue;
+    const template = pickVariety(EASY_BOSS_NAMES, usedVariety, (t) => t.name);
+    if (!template) continue;
+    const slug = point.name ? point.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 26) : "via";
     push({
-      key: `dyn-secret-${secretSegment.id}-${user.id}`,
-      name: "Ponto secreto",
-      description: `Uma localização especial próxima de "${secretSegment.name}" foi revelada. Descubra no mapa e capture no local.`,
-      kind: "secret",
-      category: "secret",
-      difficulty,
-      emblemKey: "crystal-purple",
-      lat: secretSegment.endLat,
-      lng: secretSegment.endLng,
-      radiusM: 35,
-      targetValue: 0,
+      key: `dyn-boss-easy-${epoch}-${slug}-${point.lat.toFixed(4)}`,
+      name: template.name,
+      description: `${template.desc} ${roadSourceNote}`,
+      kind: "boss",
+      category: "boss",
+      difficulty: "facil",
+      emblemKey: template.emblem,
+      sport: null,
+      lat: point.lat,
+      lng: point.lng,
+      radiusM: 50,
+      targetValue: template.target,
       unit: "m",
-      xpReward: 260,
-      coinsReward: 30,
+      xpReward: 220,
+      coinsReward: 24,
+      waypoints: [],
+      bossKind: "endurance",
+      bossMaxHp: template.hp,
       origin: "dynamic",
-      verified: false,
-      safetyNote: "Percurso precisa ser verificado no local. Área pode ter acesso restrito.",
+      tier: ring.tier,
+      roadName: point.name,
+      roadType: point.highway,
+      verified: anchor.source === "overpass" && point.safe,
+      safetyNote: point.safe ? roadSourceNote : "Via de tráfego rápido: capture somente parado, fora da pista.",
+      spawnedAt: nowIso,
+      expiresAt: expiresAt(ROTATION_HOURS * 2),
     });
   }
 
-  if (inserts.length === 0) return { created: 0, guarded };
+  /* -------- 4) Boss especial: invocado só após pré-requisitos -------- */
+  // Escalonado: 1 desafio concluído invoca o primeiro boss especial; sequências
+  // maiores (3 e 6) desbloqueiam invocações novas e mais fortes.
+  let specialSpawned = false;
+  const done = await completedCount(user.id);
+  const hasSpecial = await activeSpecialBoss(user.id);
+  const unlockThreshold = done >= 6 ? 6 : done >= 3 ? 3 : done >= 1 ? 1 : null;
+  if (!hasSpecial && unlockThreshold !== null) {
+    const template = pickVariety(SPECIAL_BOSS_NAMES, usedVariety, (t) => t.name);
+    // Bosses especiais aparecem mais longe: exigem deslocamento real.
+    const point =
+      pickRoadPointInRing({ lat: input.lat, lng: input.lng }, roads, RINGS[2], usedRoads) ??
+      pickRoadPointInRing({ lat: input.lat, lng: input.lng }, roads, RINGS[1], usedRoads);
+    if (template && point) {
+      const realDistance = haversine(input.lat, input.lng, point.lat, point.lng);
+      const tier = ringForDistance(realDistance);
+      const slug = point.name ? point.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 26) : "via";
+      specialSpawned = push({
+        key: `dyn-boss-special-${Date.now().toString(36)}-${slug}`,
+        name: template.name,
+        description: `${template.desc} Invocado após ${done} desafio${done === 1 ? "" : "s"} concluído${done === 1 ? "" : "s"}. Disponível por ${SPECIAL_BOSS_HOURS}h — depois rotaciona para outro local.`,
+        kind: "boss",
+        category: "boss",
+        difficulty: "lendaria",
+        emblemKey: template.emblem,
+        sport: null,
+        lat: point.lat,
+        lng: point.lng,
+        radiusM: 55,
+        targetValue: template.target,
+        unit: template.kind === "climb" ? "m_elev" : "m",
+        // Bosses especiais pagam bem mais que os comuns e escalam com o anel.
+        xpReward: unlockThreshold === 6 ? 1800 : unlockThreshold === 3 ? 1400 : 1100,
+        coinsReward: unlockThreshold === 6 ? 210 : unlockThreshold === 3 ? 165 : 130,
+        waypoints: [],
+        bossKind: template.bossKind,
+        bossMaxHp: unlockThreshold === 6 ? 6 : unlockThreshold === 3 ? 5 : template.hp,
+        origin: "dynamic",
+        tier,
+        roadName: point.name,
+        roadType: point.highway,
+        isSpecial: true,
+        prerequisite: unlockThreshold,
+        verified: anchor.source === "overpass" && point.safe,
+        safetyNote: point.safe
+          ? `${roadSourceNote} Boss especial com prazo de ${SPECIAL_BOSS_HOURS}h.`
+          : "Via de tráfego rápido: capture somente parado, fora da pista.",
+        spawnedAt: nowIso,
+        expiresAt: expiresAt(SPECIAL_BOSS_HOURS),
+      }) as boolean;
+    }
+  }
 
-  const toInsert = inserts.slice(0, limit);
-  await db.insert(quests).values(toInsert).onConflictDoNothing();
-  return { created: toInsert.length, guarded };
+  /* -------- 5) Rota de aventura com checkpoints em vias reais -------- */
+  const longPoint =
+    pickRoadPointInRing({ lat: input.lat, lng: input.lng }, roads, RINGS[1], usedRoads) ??
+    pickRoadPointInRing({ lat: input.lat, lng: input.lng }, roads, RINGS[0], usedRoads);
+  if (longPoint) {
+    // Checkpoints: vértices de via reais entre o atleta e o destino.
+    const corridor = roads
+      .map((r) => ({ r, d: haversine(input.lat, input.lng, r.lat, r.lng) }))
+      .filter((c) => c.d > 400 && c.d <= haversine(input.lat, input.lng, longPoint.lat, longPoint.lng) * 0.95)
+      .sort((a, b) => a.d - b.d);
+    const picked: RoadPoint[] = [];
+    const step = Math.max(1, Math.floor(corridor.length / 3));
+    for (let i = 0; i < corridor.length && picked.length < 3; i += step) picked.push(corridor[i].r);
+    picked.push(longPoint);
+    if (picked.length >= 2) {
+      const slug = longPoint.name ? longPoint.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 26) : "via";
+      const waypointList = picked.map((p, idx) => ({
+        lat: p.lat,
+        lng: p.lng,
+        label: p.name ?? `Ponto ${idx + 1}`,
+        order: idx,
+      }));
+      push({
+        key: `dyn-route-adventure-${epoch}-${slug}-${longPoint.lat.toFixed(4)}`,
+        name: `Rota de aventura · ${longPoint.name ?? "Via pública"}`,
+        description: `Rota com ${waypointList.length} checkpoints em vias públicas reais. A missão só conclui se o trajeto registrado passar por todos — chegar perto do destino não basta.`,
+        kind: "route",
+        category: "mission",
+        difficulty: "media",
+        emblemKey: "mountain-route-pin",
+        sport: input.favoriteKind,
+        lat: longPoint.lat,
+        lng: longPoint.lng,
+        radiusM: 45,
+        targetValue: 0,
+        unit: "m",
+        xpReward: 520,
+        coinsReward: 55,
+        waypoints: waypointList,
+        origin: "dynamic",
+        tier: "medio",
+        roadName: longPoint.name,
+        roadType: longPoint.highway,
+        verified: anchor.source === "overpass",
+        safetyNote: roadSourceNote,
+        spawnedAt: nowIso,
+        expiresAt: expiresAt(ROTATION_HOURS * 2),
+      });
+    }
+  }
+
+  /* -------- 6) Limite de objetivos vivos -------- */
+  const alive = await dynamicAlive(user.id);
+  const room = Math.max(0, MAX_DYNAMIC_ALIVE - alive);
+  const toInsert = inserts.slice(0, Math.max(0, Math.min(limit * 2, room)));
+
+  if (toInsert.length > 0) {
+    await db.insert(quests).values(toInsert).onConflictDoNothing();
+  }
+
+  return {
+    created: toInsert.length,
+    guarded,
+    source: anchor.source,
+    degraded: anchor.degraded,
+    specialSpawned: Boolean(specialSpawned),
+  };
 }
 
 function clusterCenter(points: { lat: number; lng: number }[]): { lat: number; lng: number } | null {
   if (points.length < 2) return null;
-  // Média dos pontos que estão a menos de 150 m de qualquer outro (aprox. base).
   for (const anchor of points) {
     const near = points.filter((p) => haversine(anchor.lat, anchor.lng, p.lat, p.lng) < 150);
     if (near.length >= Math.max(2, Math.ceil(points.length / 2))) {
       return {
-        lat: near.reduce((s, p) => s + p.lat, 0) / near.length,
-        lng: near.reduce((s, p) => s + p.lng, 0) / near.length,
+        lat: near.reduce((sum, p) => sum + p.lat, 0) / near.length,
+        lng: near.reduce((sum, p) => sum + p.lng, 0) / near.length,
       };
     }
   }

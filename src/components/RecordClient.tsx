@@ -7,6 +7,7 @@ import type { TrackPoint } from "@/db/schema";
 import { formatDuration, formatPace, formatSpeed, formatDistance } from "@/lib/format";
 import { estimateCalories, haversine } from "@/lib/geo";
 import { getSport } from "@/lib/sports";
+import { limitFor, familyOf, FAMILY_LABEL } from "@/lib/anticheat";
 import MapCanvas from "./MapCanvas";
 import { Icon, SportIcon } from "@/components/icons.client";
 
@@ -331,8 +332,17 @@ export function RecordClient({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const json = (await res.json()) as { ok: boolean; id?: number; error?: string };
-      if (!res.ok || !json.ok || !json.id) throw new Error(json.error ?? "Falha ao salvar");
+      const json = (await res.json()) as {
+        ok: boolean;
+        id?: number;
+        error?: string;
+        integrity?: { status: string; reason: string | null };
+      };
+      if (!res.ok || !json.ok || !json.id) throw new Error(json.error ?? "Falha ao salvar a atividade.");
+      // Aviso imediato: o percurso não será validado, mas o registro é mantido.
+      if (json.integrity && json.integrity.status !== "valid" && json.integrity.reason) {
+        sessionStorage.setItem(`muv-integrity-${json.id}`, json.integrity.reason);
+      }
       router.push(`/app/activities/${json.id}/save`);
     } catch (error) {
       setPhase("error");
@@ -472,10 +482,17 @@ export function RecordClient({
         ) : null}
       </div>
 
-      <p className="px-1 pb-2 text-[11px] leading-relaxed text-muted">
-        O trajeto é capturado pelo GPS real do dispositivo. Nenhum ponto é simulado: cada amostra guarda latitude, longitude,
-        precisão, altitude e velocidade — e pontos com precisão acima de 60 m são descartados automaticamente.
-      </p>
+      <div className="px-1 pb-2">
+        <p className="text-[11px] leading-relaxed text-muted">
+          Trajeto capturado pelo GPS real do dispositivo. Nenhum ponto é simulado: cada amostra guarda latitude, longitude,
+          precisão, altitude e velocidade. Leituras com precisão acima de 60 m e saltos impossíveis são descartados.
+        </p>
+        <p className="mt-2 border border-line bg-graphite px-3 py-2 text-[11px] leading-relaxed text-muted">
+          Limite desta modalidade: <span className="metric font-bold text-lime">{limitFor(sportKey)} km/h</span> sustentados.
+          Ritmo acima disso indica uso de veículo e o percurso <span className="font-semibold text-paper">não conta</span> para
+          recompensas e rankings.
+        </p>
+      </div>
     </div>
   );
 }

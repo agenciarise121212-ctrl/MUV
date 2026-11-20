@@ -206,6 +206,21 @@ function quoteValue(value, index) {
 
 async function main() {
   await client.connect();
+
+  // SEGURANÇA: o seed carrega atletas de demonstração com atividades de exemplo.
+  // Nunca roda contra um banco que já tenha usuários reais — evita sobrescrever
+  // dados de produção e garante que a execução repetida não duplique nada.
+  const existing = await client.query(`select count(*)::int as n from users`);
+  const force = process.argv.includes("--force");
+  if (existing.rows[0].n > 0 && !force) {
+    console.log(`Seed ignorado: banco já possui ${existing.rows[0].n} usuário(s). Use --force para recriar os dados de demonstração.`);
+    await client.end();
+    return;
+  }
+  if (force && existing.rows[0].n > 0) {
+    console.log(`--force: recriando dados de demonstração (apagando ${existing.rows[0].n} usuário(s))...`);
+  }
+
   await client.query(`truncate table reward_redemptions, rewards, territory_claims, territories, segment_efforts, segments,
     personal_records, user_achievements, achievements, challenge_participants, challenges, comments, kudos, activity_photos,
     activities, follows, sessions, users restart identity cascade`);

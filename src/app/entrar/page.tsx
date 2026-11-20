@@ -5,6 +5,39 @@ import { Suspense, useState } from "react";
 import Link from "next/link";
 import { Icon, LogoMark } from "@/components/icons.client";
 
+/**
+ * Leitura defensiva da resposta: verifica `res.ok` e o Content-Type antes de
+ * chamar `res.json()`. Quando o servidor devolve HTML de erro (ex.: 502 do
+ * proxy, banco indisponível), o JSON.parse do Safari lança
+ * "The string did not match the expected pattern." — este helper traduz isso
+ * em uma mensagem clara em português.
+ */
+async function readJson(res: Response): Promise<{ ok: boolean; error?: string }> {
+  const type = res.headers.get("content-type") ?? "";
+  const raw = await res.text();
+
+  if (!type.includes("application/json")) {
+    return {
+      ok: false,
+      error: res.ok
+        ? "Resposta inesperada do servidor. Tente novamente."
+        : res.status >= 500
+          ? "Servidor indisponível neste momento. Tente novamente em alguns segundos."
+          : "Não foi possível concluir a operação. Tente novamente.",
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as { ok?: boolean; error?: string };
+    if (parsed && typeof parsed === "object") {
+      return { ok: parsed.ok === true, error: typeof parsed.error === "string" ? parsed.error : undefined };
+    }
+    return { ok: false, error: "Resposta inválida do servidor." };
+  } catch {
+    return { ok: false, error: "Não foi possível ler a resposta do servidor. Tente novamente." };
+  }
+}
+
 const DEMO = [
   { email: "ana@muv.app", name: "Ana Souza", detail: "Estrada · corrida de rua" },
   { email: "bruno@muv.app", name: "Bruno Lima", detail: "Trail · mountain bike" },
@@ -29,15 +62,19 @@ function AuthForm() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: mode,
-          name: form.get("name"),
-          username: form.get("username"),
-          email: form.get("email"),
-          password: form.get("password"),
-          city: form.get("city"),
+          name: String(form.get("name") ?? "").trim(),
+          username: String(form.get("username") ?? "").trim(),
+          email: String(form.get("email") ?? "").trim(),
+          password: String(form.get("password") ?? ""),
+          city: String(form.get("city") ?? "").trim(),
         }),
       });
-      const json = (await res.json()) as { ok: boolean; error?: string };
-      if (!json.ok) throw new Error(json.error ?? "Erro de autenticação");
+      if (!res.ok && res.status >= 500) {
+        const soft = await readJson(res);
+        throw new Error(soft.error ?? "Servidor indisponível. Tente novamente.");
+      }
+      const json = await readJson(res);
+      if (!json.ok) throw new Error(json.error ?? "Não foi possível concluir a operação.");
       router.push("/app");
       router.refresh();
     } catch (err) {
@@ -56,8 +93,8 @@ function AuthForm() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "login", email, password: "muv1234" }),
       });
-      const json = (await res.json()) as { ok: boolean; error?: string };
-      if (!json.ok) throw new Error(json.error ?? "Erro no login do atleta demo");
+      const json = await readJson(res);
+      if (!json.ok) throw new Error(json.error ?? "Não foi possível entrar com o atleta de demonstração.");
       router.push("/app");
       router.refresh();
     } catch (err) {
@@ -126,15 +163,15 @@ function AuthForm() {
         <form onSubmit={submit} className="mt-8 max-w-md space-y-4">
           {mode === "signup" ? (
             <>
-              <Field label="Nome" name="name" placeholder="Seu nome" required />
+              <Field label="Nome" name="name" placeholder="Seu nome" autoComplete="name" />
               <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Usuário" name="username" placeholder="atleta123" required />
+                <Field label="Usuário" name="username" placeholder="atleta123" autoComplete="username" />
                 <Field label="Cidade" name="city" placeholder="São Paulo, SP" />
               </div>
             </>
           ) : null}
-          <Field label="E-mail" name="email" type="email" placeholder="voce@email.com" required />
-          <Field label="Senha" name="password" type="password" placeholder="Mínimo 6 caracteres" required />
+          <Field label="E-mail" name="email" type="email" inputMode="email" placeholder="voce@email.com" autoComplete="email" />
+          <Field label="Senha" name="password" type="password" placeholder="Mínimo 6 caracteres" autoComplete={mode === "signup" ? "new-password" : "current-password"} />
 
           {error ? (
             <p className="border border-flame/40 bg-flame/10 px-3 py-2 text-[12px] text-flame">{error}</p>
@@ -186,18 +223,30 @@ function Field({
   name,
   type = "text",
   placeholder,
-  required,
+  autoComplete,
+  inputMode,
 }: {
   label: string;
   name: string;
   type?: string;
   placeholder?: string;
-  required?: boolean;
+  autoComplete?: string;
+  inputMode?: "text" | "email" | "numeric" | "decimal";
 }) {
   return (
     <label className="block">
       <span className="mb-1.5 block text-[9px] font-display font-bold uppercase tracking-[0.18em] text-muted">{label}</span>
-      <input name={name} type={type} placeholder={placeholder} required={required} className="field py-3" />
+      <input
+        name={name}
+        type={type}
+        placeholder={placeholder}
+        autoComplete={autoComplete}
+        inputMode={inputMode}
+        // Sem atributo `pattern`: o Safari aplica a validação de regex antes do
+        // submit e reporta o erro genérico que o usuário viu. A validação de
+        // formato agora é feita no servidor, com mensagem em português.
+        className="field py-3"
+      />
     </label>
   );
 }

@@ -104,6 +104,18 @@ export const activities = pgTable(
     autoPauses: integer("auto_pauses").notNull().default(0),
     gpsPoints: integer("gps_points").notNull().default(0),
     avgAccuracyM: doublePrecision("avg_accuracy_m").notNull().default(0),
+    /** Veredito de integridade: valid | suspicious | invalid. */
+    integrityStatus: varchar("integrity_status", { length: 16 }).notNull().default("valid"),
+    /** Motivo legível quando o percurso não é validado. */
+    integrityReason: varchar("integrity_reason", { length: 400 }),
+    /** Métricas de integridade (velocidade sustentada, saltos, amostras descartadas). */
+    integrityMetrics: jsonb("integrity_metrics").$type<Record<string, number>>().notNull().default({}),
+    /** Maior velocidade média sustentada detectada (km/h). */
+    maxSustainedKmh: doublePrecision("max_sustained_kmh").notNull().default(0),
+    /** Amostras de GPS descartadas por precisão ruim ou salto impossível. */
+    discardedPoints: integer("discarded_points").notNull().default(0),
+    /** Excluída de rankings, desafios e territórios por integridade comprometida. */
+    blockedFromRanking: boolean("blocked_from_ranking").notNull().default(false),
     device: varchar("device", { length: 120 }),
     weather: varchar("weather", { length: 60 }),
     isIndoor: boolean("is_indoor").notNull().default(false),
@@ -379,6 +391,20 @@ export const quests = pgTable(
     bossMaxHp: integer("boss_max_hp").notNull().default(0),
     /** Origem da missão: catalogue | gerada por dinâmica. */
     origin: varchar("origin", { length: 16 }).notNull().default("catalogue"),
+    /** Anel de distância do objetivo: curto | medio | longo (escala de recompensa). */
+    tier: varchar("tier", { length: 12 }).notNull().default("medio"),
+    /** Via pública onde o objetivo está ancorado (nome OSM, quando disponível). */
+    roadName: varchar("road_name", { length: 140 }),
+    /** Tipo de via OSM usado para validar que o ponto é transitável. */
+    roadType: varchar("road_type", { length: 32 }),
+    /** Boss especial desbloqueado por pré-requisitos. */
+    isSpecial: boolean("is_special").notNull().default(false),
+    /** Desafios pré-requisitos para invocar este boss especial. */
+    prerequisite: integer("prerequisite").notNull().default(0),
+    /** Momento em que o objetivo apareceu no mapa. */
+    spawnedAt: timestamp("spawned_at", { withTimezone: true }),
+    /** Prazo de rotação: após expirar, o objetivo é trocado por outro local. */
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
     /** Indica se a área/percurso é de acesso confirmado. */
     verified: boolean("verified").notNull().default(false),
     safetyNote: varchar("safety_note", { length: 240 }),

@@ -10,6 +10,8 @@ import { CATEGORY_META, type QuestCategory } from "@/lib/emblems";
 import {
   DIFFICULTY_META,
   QUEST_STAT_LABEL,
+  TIER_LABEL,
+  formatCountdown,
   formatQuestDistance,
   gpsReadiness,
   questProgressLabel,
@@ -76,6 +78,7 @@ export function QuestMap({ initialQuests, territories, territoryLines, segmentLi
   const [filters, setFilters] = useState<Filters>({ categories: {}, showCompleted: false });
   const lastSyncRef = useRef<{ at: number; lat: number; lng: number } | null>(null);
   const prevPosRef = useRef<{ lat: number; lng: number; t: number } | null>(null);
+  const firstSyncRef = useRef(true);
 
   const gps = gpsReadiness(accuracy);
 
@@ -119,9 +122,10 @@ export function QuestMap({ initialQuests, territories, territoryLines, segmentLi
       lastSyncRef.current = { at: Date.now(), lat, lng };
       try {
         const res = await fetch(
-          `/api/quests?lat=${lat}&lng=${lng}&accuracyM=${accuracy}&speedKmh=${speed ?? ""}`,
+          `/api/quests?lat=${lat}&lng=${lng}&accuracyM=${accuracy}&speedKmh=${speed ?? ""}${firstSyncRef.current ? "&seed=1" : ""}`,
           { cache: "no-store" },
         );
+        firstSyncRef.current = false;
         const json = (await res.json()) as { ok: boolean; quests?: QuestView[] };
         if (json.ok && json.quests) setQuests(json.quests);
       } catch {
@@ -150,6 +154,8 @@ export function QuestMap({ initialQuests, territories, territoryLines, segmentLi
   useEffect(() => {
     setNearId(nearest && (nearest.distanceM ?? 0) <= (nearest.radiusM * 2.5) ? nearest.id : null);
   }, [nearest]);
+
+  const nearQuest = quests.find((q) => q.id === nearId) ?? null;
 
   const filtered = useMemo(() => {
     return quests.filter((q) => {
@@ -271,11 +277,21 @@ export function QuestMap({ initialQuests, territories, territoryLines, segmentLi
               size={34}
             />
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-[12px] font-semibold">
-                {quests.find((q) => q.id === nearId)?.name}
+              <span className="flex items-center gap-1.5">
+                <span className="block truncate text-[12px] font-semibold">
+                  {nearQuest?.name}
+                </span>
+                {nearQuest?.isSpecial ? (
+                  <span className="shrink-0 border border-flame/50 px-1 py-[1px] text-[8px] font-display font-bold uppercase tracking-[0.1em] text-flame">
+                    especial
+                  </span>
+                ) : null}
               </span>
               <span className="tabular block text-[10px] text-muted">
-                {formatQuestDistance(quests.find((q) => q.id === nearId)?.distanceM ?? null)} de você · toque para ver
+                {formatQuestDistance(nearQuest?.distanceM ?? null)} de você · {TIER_LABEL[nearQuest?.tier ?? "medio"]}
+                {nearQuest?.timeLeftSec !== null && nearQuest?.timeLeftSec !== undefined
+                  ? ` · ${formatCountdown(nearQuest.timeLeftSec)}`
+                  : ""}
               </span>
             </span>
             <Icon.chevron className="size-3.5 shrink-0 text-muted" />
@@ -328,18 +344,46 @@ export function QuestMap({ initialQuests, territories, territoryLines, segmentLi
             <div className="flex items-start gap-3">
               <EmblemIcon emblem={selected.emblem} size={52} />
               <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-1.5">
                   <span className="text-[9px] font-display font-bold uppercase tracking-[0.16em]" style={{ color: selected.accent }}>
                     {selected.kindLabel}
                   </span>
                   <span className="text-[9px] font-display font-bold uppercase tracking-[0.16em] text-muted">
                     {DIFFICULTY_META[selected.difficulty]?.label}
                   </span>
+                  <span
+                    className="border px-1.5 py-[1px] text-[8px] font-display font-bold uppercase tracking-[0.1em]"
+                    style={{
+                      borderColor: selected.tier === "longo" ? "rgba(255,212,59,0.5)" : selected.tier === "medio" ? "rgba(111,182,255,0.4)" : "var(--color-line)",
+                      color: selected.tier === "longo" ? "#ffd43b" : selected.tier === "medio" ? "#6fb6ff" : "var(--color-muted)",
+                    }}
+                  >
+                    {TIER_LABEL[selected.tier]}
+                  </span>
+                  {selected.isSpecial ? (
+                    <span className="border border-flame/50 px-1.5 py-[1px] text-[8px] font-display font-bold uppercase tracking-[0.1em] text-flame">
+                      boss especial
+                    </span>
+                  ) : null}
                 </div>
                 <p className="display-2 mt-1 truncate text-[15px]">{selected.name}</p>
                 <p className="tabular mt-0.5 text-[11px] text-muted">
-                  {formatQuestDistance(selected.distanceM)} · {questProgressLabel(selected)} · +{selected.xpReward} XP
+                  {formatQuestDistance(selected.distanceM)} · {questProgressLabel(selected)} · +{selected.xpReward} XP · +{selected.coinsReward} moedas
                 </p>
+                {selected.timeLeftSec !== null ? (
+                  <p
+                    className="metric mt-1.5 text-[11px] font-bold"
+                    style={{ color: selected.timeLeftSec > 3600 ? "#d5ff45" : "#ff6a3d" }}
+                  >
+                    ⏱ {formatCountdown(selected.timeLeftSec)} restantes
+                  </p>
+                ) : null}
+                {selected.roadName ? (
+                  <p className="mt-1.5 truncate text-[10px] text-muted">
+                    Via: {selected.roadName}
+                    {selected.roadType ? ` · ${selected.roadType}` : ""}
+                  </p>
+                ) : null}
               </div>
               <button type="button" onClick={() => setSelectedId(null)} className="tap size-8 shrink-0" aria-label="Fechar painel">
                 <Icon.close className="size-4" />
@@ -494,6 +538,10 @@ export function QuestMap({ initialQuests, territories, territoryLines, segmentLi
           <Icon.bolt className="size-4" />
           Gerar missões pela minha região
         </button>
+        <p className="mt-2 text-[10px] leading-relaxed text-muted">
+          Objetivos posicionados sobre vias públicas reais (OpenStreetMap). Recompensas crescem com a distância: curto, médio
+          e longo alcance. Bosses especiais só aparecem após você concluir desafios.
+        </p>
       </BottomSheet>
 
       {/* Lista de objetivos */}

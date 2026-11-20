@@ -5,6 +5,7 @@ import { useRef, useState } from "react";
 import { formatDistance, formatDuration, formatPace, formatSpeed } from "@/lib/format";
 import { getSport, isRideSport } from "@/lib/sports";
 import { Icon } from "@/components/icons.client";
+import { integrityBadge, type IntegrityStatus } from "@/lib/anticheat";
 
 type PendingPhoto = { key: string; dataUrl: string; caption: string; savedId?: number };
 
@@ -65,6 +66,12 @@ export function SaveFlow({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [summary, setSummary] = useState<Summary | null>(null);
+  const [integrity, setIntegrity] = useState<{ status: IntegrityStatus; reason: string | null }>(() => {
+    if (typeof window === "undefined") return { status: "valid", reason: null };
+    const stored = window.sessionStorage.getItem(`muv-integrity-${activity.id}`);
+    window.sessionStorage.removeItem(`muv-integrity-${activity.id}`);
+    return { status: (stored ? "suspicious" : "valid") as IntegrityStatus, reason: stored };
+  });
 
   async function compress(file: File): Promise<string> {
     const dataUrl = await new Promise<string>((resolve, reject) => {

@@ -60,16 +60,26 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
   }
 
   if (shouldPublish) {
-    const photos = await db.select({ id: activityPhotos.id }).from(activityPhotos).where(eq(activityPhotos.activityId, id));
     const [fresh] = await db.select().from(activities).where(eq(activities.id, id)).limit(1);
     if (fresh) {
-      summary = await processActivity({ ...user, xp: user.xp, coins: user.coins }, fresh, {
-        photosCount: photos.length,
-        isNew: true,
-      });
-      // Integração RPG: a atividade real credita progresso nas missões compatíveis.
-      // Cada atividade é creditada uma única vez por missão (anti-duplicidade).
-      questEvents = await creditActivityToQuests({ ...user, xp: summary.totalXp, coins: summary.totalCoins }, fresh);
+      // REGRA ANTI-TRAPAÇA: percurso não validado não gera recompensa alguma.
+      // Sem XP, sem moedas, sem conquistas, sem recordes, sem territórios,
+      // sem crédito em missões e sem derrubar Bosses. Também não entra em
+      // rankings (fica com visibility reduzida).
+      const blocked = fresh.integrityStatus !== "valid";
+      if (blocked) {
+        updates.blockedFromRanking = true;
+        await db.update(activities).set({ blockedFromRanking: true }).where(eq(activities.id, id));
+      } else {
+        const photos = await db.select({ id: activityPhotos.id }).from(activityPhotos).where(eq(activityPhotos.activityId, id));
+        summary = await processActivity({ ...user, xp: user.xp, coins: user.coins }, fresh, {
+          photosCount: photos.length,
+          isNew: true,
+        });
+        // Integração RPG: a atividade real credita progresso nas missões compatíveis.
+        // Cada atividade é creditada uma única vez por missão (anti-duplicidade).
+        questEvents = await creditActivityToQuests({ ...user, xp: summary.totalXp, coins: summary.totalCoins }, fresh);
+      }
     }
   }
 

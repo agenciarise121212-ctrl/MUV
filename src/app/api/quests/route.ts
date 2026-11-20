@@ -1,5 +1,6 @@
 import { requireApiUser } from "@/lib/auth";
-import { captureQuest, generateDynamicQuests, loadQuestBoard, setQuestPaused, startQuest } from "@/lib/quests";
+import { captureQuest, generateDynamicQuests, loadQuestBoard, rotateQuests, setQuestPaused, startQuest } from "@/lib/quests";
+import { sportsFromHistory } from "@/lib/quest-context";
 
 export const dynamic = "force-dynamic";
 
@@ -31,6 +32,7 @@ export async function GET(request: Request) {
   const user = await requireApiUser();
   if (!user) return Response.json({ ok: false, error: "Não autenticado" }, { status: 401 });
   const url = new URL(request.url);
+  const seed = url.searchParams.get("seed") === "1";
   const lat = Number(url.searchParams.get("lat"));
   const lng = Number(url.searchParams.get("lng"));
   const accuracy = Number(url.searchParams.get("accuracyM"));
@@ -40,8 +42,29 @@ export async function GET(request: Request) {
       ? { lat, lng, accuracyM: Number.isFinite(accuracy) ? accuracy : null, speedKmh: Number.isFinite(speed) ? speed : null }
       : null;
 
-  const board = await loadQuestBoard(user.id, position);
-  return Response.json({ ok: true, ...board });
+  let board = await loadQuestBoard(user.id, position);
+
+  // Primeira abertura (ou mapa vazio após rotação): popula objetivos ao redor
+  // do atleta ancorados em vias públicas reais.
+  if (seed || board.quests.length === 0) {
+    const ctx = await sportsFromHistory(user.id);
+    await generateDynamicQuests(
+      user,
+      {
+        lat: position?.lat ?? ctx.fallbackLat,
+        lng: position?.lng ?? ctx.fallbackLng,
+        level: Math.max(1, levelOf(user.xp)),
+        xp: user.xp,
+        totalKm: ctx.totalKm,
+        totalElev: ctx.totalElev,
+        favoriteKind: ctx.favoriteKind,
+      },
+      8,
+    );
+    board = await loadQuestBoard(user.id, position);
+  }
+
+  return Response.json({ ok: true, ...board, source: board.quests.length > 0 ? "ok" : "empty" });
 }
 
 export async function POST(request: Request) {
@@ -57,15 +80,20 @@ export async function POST(request: Request) {
   }
 
   if (body.action === "generate") {
-    const result = await generateDynamicQuests(user, {
-      lat: position?.lat ?? -23.5505,
-      lng: position?.lng ?? -46.6333,
-      level: Math.max(1, levelOf(user.xp)),
-      xp: user.xp,
-      totalKm: 0,
-      totalElev: 0,
-      favoriteKind: "ride",
-    });
+    const ctx = await sportsFromHistory(user.id);
+    const result = await generateDynamicQuests(
+      user,
+      {
+        lat: position?.lat ?? ctx.fallbackLat,
+        lng: position?.lng ?? ctx.fallbackLng,
+        level: Math.max(1, levelOf(user.xp)),
+        xp: user.xp,
+        totalKm: ctx.totalKm,
+        totalElev: ctx.totalElev,
+        favoriteKind: ctx.favoriteKind,
+      },
+      8,
+    );
     const board = await loadQuestBoard(user.id, position);
     return Response.json({ ok: true, ...result, ...board });
   }
