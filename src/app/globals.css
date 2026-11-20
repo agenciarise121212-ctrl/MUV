@@ -1,0 +1,489 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink: #101112;
+  --color-graphite: #191b1e;
+  --color-graphite-2: #1f2226;
+  --color-line: #2a2d33;
+  --color-lime: #d5ff45;
+  --color-paper: #f5f5f2;
+  --color-muted: #858b94;
+  --color-flame: #ff6a3d;
+  --color-sky: #6fb6ff;
+
+  --font-display: var(--font-archivo), "Helvetica Neue", Arial, sans-serif;
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+
+  /* Altura da barra inferior + respiro — usada para nunca esconder conteúdo */
+  --nav-h: 60px;
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+html {
+  /* Viewport dinâmica real do dispositivo */
+  height: 100%;
+  -webkit-text-size-adjust: 100%;
+}
+
+html,
+body {
+  overflow-x: clip;
+  max-width: 100%;
+}
+
+/* Título editorial: nunca deixa transbordar, mas sem criar contexto de scroll */
+.display-1,
+.display-2 {
+  min-width: 0;
+  overflow-wrap: break-word;
+  hyphens: none;
+}
+
+/* Elementos flex/grid nunca ultrapassam o pai */
+.min-w-0-safe {
+  min-width: 0;
+}
+
+body {
+  height: 100%;
+  background: #08090a;
+  color: var(--color-paper);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.5;
+  overscroll-behavior-y: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--color-lime);
+  color: #101112;
+}
+
+/* Moldura de aplicativo: tela cheia no celular, coluna de 480px no desktop */
+#app-frame {
+  position: relative;
+  width: 100%;
+  max-width: 480px;
+  min-height: 100dvh;
+  margin-inline: auto;
+  background: var(--color-ink);
+  isolation: isolate;
+  overflow-x: clip;
+}
+
+/* Toda imagem e bloco flexível respeita a largura disponível */
+#app-frame img,
+#app-frame svg {
+  max-width: 100%;
+}
+
+@media (min-width: 520px) {
+  #app-frame {
+    box-shadow: 0 0 0 1px var(--color-line), 0 30px 90px rgba(0, 0, 0, 0.6);
+  }
+}
+
+/* Camada de conteúdo com rolagem natural e respeitando a barra inferior */
+.app-body {
+  padding-bottom: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px) + 28px);
+}
+
+/* -------------------------------- Tipografia ------------------------------- */
+
+.font-display {
+  font-family: var(--font-display);
+  font-weight: 800;
+}
+
+.display-1 {
+  font-family: var(--font-display);
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: -0.035em;
+  line-height: 0.92;
+}
+
+.display-2 {
+  font-family: var(--font-display);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: -0.02em;
+  line-height: 1.05;
+}
+
+.eyebrow {
+  font-family: var(--font-display);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  font-size: 9px;
+  color: var(--color-muted);
+}
+
+.metric {
+  font-family: var(--font-display);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+  letter-spacing: -0.02em;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* -------------------------------- Superfícies ------------------------------- */
+
+.surface {
+  background: var(--color-graphite);
+  border: 1px solid var(--color-line);
+}
+
+.hairline {
+  border: 1px solid var(--color-line);
+}
+.hairline-t {
+  border-top: 1px solid var(--color-line);
+}
+.hairline-b {
+  border-bottom: 1px solid var(--color-line);
+}
+
+.tick {
+  width: 3px;
+  background: var(--color-lime);
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+/* --------------------------------- Botões --------------------------------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  font-family: var(--font-display);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 12px;
+  min-height: 44px; /* área de toque confortável */
+  padding: 0.6rem 1.2rem;
+  border: 1px solid transparent;
+  transition: background 0.16s ease, color 0.16s ease, border-color 0.16s ease, transform 0.16s ease;
+  cursor: pointer;
+  user-select: none;
+}
+
+.btn-primary {
+  background: var(--color-lime);
+  color: #101112;
+}
+.btn-primary:hover {
+  background: #e3ff7a;
+}
+.btn-primary:active {
+  transform: scale(0.985);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--color-paper);
+  border-color: var(--color-line);
+}
+.btn-ghost:hover {
+  border-color: var(--color-muted);
+}
+
+.btn-dark {
+  background: var(--color-graphite);
+  color: var(--color-paper);
+  border-color: var(--color-line);
+}
+.btn-dark:hover {
+  border-color: var(--color-muted);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Alvo de toque quadrado padrão (44px) */
+.tap {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--color-line);
+  color: var(--color-muted);
+  transition: border-color 0.16s ease, color 0.16s ease;
+}
+.tap:hover {
+  color: var(--color-paper);
+  border-color: var(--color-muted);
+}
+
+/* --------------------------------- Inputs --------------------------------- */
+
+input,
+textarea,
+select {
+  font-family: var(--font-sans);
+  font-size: 16px; /* evita zoom automático no iOS */
+  border-radius: 3px;
+}
+
+input[type="file"] {
+  display: none;
+}
+input[type="checkbox"] {
+  accent-color: var(--color-lime);
+  width: 20px;
+  height: 20px;
+}
+
+.field {
+  width: 100%;
+  background: #0c0d0e;
+  border: 1px solid var(--color-line);
+  color: var(--color-paper);
+  padding: 0.7rem 0.8rem;
+  transition: border-color 0.16s ease;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.field:focus {
+  outline: none;
+  border-color: var(--color-lime);
+}
+.field::placeholder {
+  color: #5c626b;
+}
+
+/* ----------------------------- Barra inferior ----------------------------- */
+
+.tabbar {
+  position: fixed;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 100%;
+  max-width: 480px;
+  z-index: 40;
+  background: rgba(16, 17, 18, 0.94);
+  backdrop-filter: blur(14px);
+  border-top: 1px solid var(--color-line);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.tabbar-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-height: var(--nav-h);
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+  transition: color 0.18s ease;
+}
+
+.tabbar-item[data-active="true"] {
+  color: var(--color-lime);
+}
+.tabbar-item[data-active="false"]:active {
+  color: var(--color-paper);
+}
+
+/* Botão central INÍCIO */
+.tabbar-start {
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  margin-top: -22px;
+  border-radius: 18px;
+  background: var(--color-lime);
+  color: #101112;
+  transition: transform 0.16s ease, background 0.16s ease;
+}
+.tabbar-start:active {
+  transform: scale(0.94);
+}
+.tabbar-start[data-active="true"] {
+  background: var(--color-lime);
+  box-shadow: 0 0 0 2px #101112, 0 0 0 3.5px var(--color-lime);
+}
+
+/* ------------------------------ Header de app ------------------------------ */
+
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  padding-top: env(safe-area-inset-top, 0px);
+  background: rgba(16, 17, 18, 0.94);
+  backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--color-line);
+}
+
+/* ------------------------------ Bottom sheet ------------------------------ */
+
+.sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(0, 0, 0, 0.62);
+  animation: fade 0.2s ease both;
+}
+
+.sheet {
+  position: fixed;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 100%;
+  max-width: 480px;
+  z-index: 61;
+  background: var(--color-graphite);
+  border-top: 1px solid var(--color-line);
+  border-radius: 18px 18px 0 0;
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 16px);
+  max-height: 86dvh;
+  overflow-y: auto;
+  animation: sheet-up 0.26s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+
+.sheet-grabber {
+  width: 40px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--color-line);
+  margin: 10px auto 4px;
+}
+
+@keyframes sheet-up {
+  from {
+    transform: translate(-50%, 100%);
+  }
+  to {
+    transform: translate(-50%, 0);
+  }
+}
+
+/* ------------------------------- Animações ------------------------------- */
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.rise {
+  animation: rise 0.32s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.fade {
+  animation: fade 0.3s ease both;
+}
+
+@keyframes ticker {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+.ticker {
+  animation: ticker 34s linear infinite;
+}
+
+@keyframes pulse-ring {
+  0% {
+    box-shadow: 0 0 0 0 rgba(213, 255, 69, 0.4);
+  }
+  70% {
+    box-shadow: 0 0 0 12px rgba(213, 255, 69, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(213, 255, 69, 0);
+  }
+}
+.recording-dot {
+  animation: pulse-ring 2s infinite;
+}
+
+.shimmer {
+  animation: fade 1.4s ease-in-out infinite alternate;
+}
+
+.hover-lift {
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+.hover-lift:active {
+  background: var(--color-graphite-2);
+}
+
+/* --------------------------------- Mapa --------------------------------- */
+
+.maplibregl-ctrl-attrib,
+.maplibregl-ctrl-bottom-right {
+  font-size: 9px !important;
+  opacity: 0.35;
+}
+.maplibregl-canvas:focus {
+  outline: none;
+}
+
+.photo {
+  filter: saturate(0.86) contrast(1.08) brightness(0.92);
+}
+.photo-duotone {
+  filter: grayscale(0.35) contrast(1.14) brightness(0.86);
+}
+
+/* Controles flutuantes sobre o mapa */
+.map-fab {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  background: rgba(16, 17, 18, 0.92);
+  border: 1px solid var(--color-line);
+  color: var(--color-paper);
+  backdrop-filter: blur(10px);
+  transition: border-color 0.16s ease, color 0.16s ease;
+}
+.map-fab:hover {
+  border-color: var(--color-lime);
+  color: var(--color-lime);
+}

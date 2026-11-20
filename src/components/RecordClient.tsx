@@ -1,0 +1,492 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
+import type { TrackPoint } from "@/db/schema";
+import { formatDuration, formatPace, formatSpeed, formatDistance } from "@/lib/format";
+import { estimateCalories, haversine } from "@/lib/geo";
+import { getSport } from "@/lib/sports";
+import MapCanvas from "./MapCanvas";
+import { Icon, SportIcon } from "@/components/icons.client";
+
+type Phase = "ready" | "recording" | "paused" | "saving" | "error";
+
+type Snapshot = {
+  distanceM: number;
+  movingSec: number;
+  elapsedSec: number;
+  gain: number;
+  loss: number;
+  maxSpeed: number;
+  currentSpeed: number;
+  calories: number;
+  points: number;
+  accuracy: number;
+  altitude: number | null;
+};
+
+const EMPTY: Snapshot = {
+  distanceM: 0,
+  movingSec: 0,
+  elapsedSec: 0,
+  gain: 0,
+  loss: 0,
+  maxSpeed: 0,
+  currentSpeed: 0,
+  calories: 0,
+  points: 0,
+  accuracy: 0,
+  altitude: null,
+};
+
+export function RecordClient({
+  sportKey,
+  weightKg,
+  autoPauseEnabled,
+  deviceName,
+}: {
+  sportKey: string;
+  weightKg: number;
+  autoPauseEnabled: boolean;
+  deviceName: string;
+}) {
+  const sport = getSport(sportKey);
+  const router = useRouter();
+  const [phase, setPhase] = useState<Phase>("ready");
+  const [gpsError, setGpsError] = useState<string | null>(null);
+  const [hasSignal, setHasSignal] = useState(false);
+  const [stats, setStats] = useState<Snapshot>(EMPTY);
+  const [userPos, setUserPos] = useState<[number, number] | null>(null);
+  const [accuracy, setAccuracy] = useState(0);
+  const [route, setRoute] = useState<[number, number][]>([]);
+  const [follow, setFollow] = useState(true);
+  const [autoPaused, setAutoPaused] = useState(false);
+  const [manualDistance, setManualDistance] = useState("");
+  const [toast, setToast] = useState<string | null>(null);
+
+  const pointsRef = useRef<TrackPoint[]>([]);
+  const distanceRef = useRef(0);
+  const movingRef = useRef(0);
+  const elapsedRef = useRef(0);
+  const gainRef = useRef(0);
+  const lossRef = useRef(0);
+  const maxSpeedRef = useRef(0);
+  const elevBaseRef = useRef<number | null>(null);
+  const pausesRef = useRef(0);
+  const autoPausesRef = useRef(0);
+  const stillSinceRef = useRef<number | null>(null);
+  const movingSinceRef = useRef<number | null>(null);
+  const watchRef = useRef<number | null>(null);
+  const wakeRef = useRef<{ release: () => Promise<void> } | null>(null);
+  const startedAtRef = useRef<number | null>(null);
+  const pausedAtRef = useRef<number | null>(null);
+  const phaseRef = useRef<Phase>("ready");
+
+  useEffect(() => {
+    phaseRef.current = phase;
+  }, [phase]);
+
+  const gpsQuality = useMemo(() => {
+    if (!hasSignal || accuracy === 0) return { label: "Aguardando GPS", tone: "#8a97a8" };
+    if (accuracy <= 8) return { label: "GPS ótimo", tone: "#d5ff45" };
+    if (accuracy <= 15) return { label: "GPS bom", tone: "#63e6be" };
+    if (accuracy <= 30) return { label: "GPS regular", tone: "#ffd43b" };
+    return { label: "GPS fraco", tone: "#ff7a3d" };
+  }, [hasSignal, accuracy]);
+
+  const handlePosition = useCallback(
+    (pos: GeolocationPosition) => {
+      const acc = pos.coords.accuracy ?? 0;
+      setAccuracy(acc);
+      setHasSignal(true);
+      setUserPos([pos.coords.longitude, pos.coords.latitude]);
+      const phaseNow = phaseRef.current;
+      if (phaseNow !== "recording" && phaseNow !== "paused") return;
+      if (acc > 60) {
+        setToast("Sinal de GPS fraco — aguardando precisão melhor");
+        return;
+      }
+      const t = Date.now();
+      const alt = typeof pos.coords.altitude === "number" ? pos.coords.altitude : null;
+      const last = pointsRef.current.length > 0 ? pointsRef.current[pointsRef.current.length - 1] : null;
+      const deviceSpeed = typeof pos.coords.speed === "number" && pos.coords.speed >= 0 ? pos.coords.speed * 3.6 : null;
+      let stepSpeed = 0;
+      if (last) {
+        const d = haversine(last.lat, last.lng, pos.coords.latitude, pos.coords.longitude);
+        const dt = (t - last.t) / 1000;
+        stepSpeed = dt > 0.4 ? (d / dt) * 3.6 : 0;
+      }
+      const speed = deviceSpeed ?? stepSpeed;
+      if (speed > sport.plausibleMaxKmh) return; // ruído de GPS: ponto descartado
+
+      if (alt !== null) {
+        if (elevBaseRef.current === null) elevBaseRef.current = alt;
+        const delta = alt - elevBaseRef.current;
+        if (delta > 1.5) {
+          gainRef.current += delta;
+          elevBaseRef.current = alt;
+        } else if (delta < -1.5) {
+          lossRef.current += -delta;
+          elevBaseRef.current = alt;
+        }
+      }
+
+      if (last) {
+        const d = haversine(last.lat, last.lng, pos.coords.latitude, pos.coords.longitude);
+        if (d >= 2 && d < 220) distanceRef.current += d;
+      }
+
+      pointsRef.current.push({
+        t,
+        lat: pos.coords.latitude,
+        lng: pos.coords.longitude,
+        acc,
+        alt: alt ?? undefined,
+        spd: speed,
+      });
+
+      // Pausa automática por baixa velocidade (ciclismo/corrida)
+      if (autoPauseEnabled && sport.supportsAutoPause) {
+        const now = t;
+        if (speed < sport.stopThresholdKmh) {
+          if (stillSinceRef.current === null) stillSinceRef.current = now;
+          if (now - stillSinceRef.current > 6000 && phaseRef.current === "recording") {
+            phaseRef.current = "paused";
+            pausedAtRef.current = now;
+            setPhase("paused");
+            setAutoPaused(true);
+            autoPausesRef.current += 1;
+          }
+        } else {
+          stillSinceRef.current = null;
+          if (phaseRef.current === "paused" && autoPaused && speed > sport.stopThresholdKmh + 1) {
+            if (movingSinceRef.current === null) movingSinceRef.current = now;
+            if (now - movingSinceRef.current > 1500) {
+              elapsedRef.current += pausedAtRef.current ? (now - pausedAtRef.current) / 1000 : 0;
+              pausedAtRef.current = null;
+              phaseRef.current = "recording";
+              setPhase("recording");
+              setAutoPaused(false);
+              movingSinceRef.current = null;
+            }
+          } else {
+            movingSinceRef.current = null;
+          }
+        }
+      }
+    },
+    [autoPaused, autoPauseEnabled, sport],
+  );
+
+  const startGps = useCallback(() => {
+    if (!("geolocation" in navigator)) {
+      setGpsError("Este navegador não oferece suporte a GPS.");
+      return;
+    }
+    setGpsError(null);
+    watchRef.current = navigator.geolocation.watchPosition(
+      handlePosition,
+      (err) => {
+        setGpsError(
+          err.code === err.PERMISSION_DENIED
+            ? "Permissão de localização negada. Ative o GPS para registrar o trajeto real."
+            : "Não foi possível obter a localização. Procure um céu aberto.",
+        );
+      },
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 },
+    );
+  }, [handlePosition]);
+
+  const stopGps = useCallback(() => {
+    if (watchRef.current !== null) {
+      navigator.geolocation.clearWatch(watchRef.current);
+      watchRef.current = null;
+    }
+  }, []);
+
+  const requestWakeLock = useCallback(async () => {
+    const nav = navigator as Navigator & {
+      wakeLock?: { request: (type: "screen") => Promise<{ release: () => Promise<void> }> };
+    };
+    try {
+      if (nav.wakeLock) wakeRef.current = await nav.wakeLock.request("screen");
+    } catch {
+      /* dispositivo sem suporte */
+    }
+  }, []);
+
+  const releaseWakeLock = useCallback(async () => {
+    try {
+      await wakeRef.current?.release();
+    } catch {
+      /* noop */
+    }
+    wakeRef.current = null;
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      if (phaseRef.current === "recording" && startedAtRef.current) {
+        elapsedRef.current = (now - startedAtRef.current) / 1000 - (pausedAtRef.current ? (now - pausedAtRef.current) / 1000 : 0);
+        movingRef.current += 0.5;
+      }
+      const track = pointsRef.current;
+      const last = track.length > 0 ? track[track.length - 1] : null;
+      setStats({
+        distanceM: distanceRef.current,
+        movingSec: movingRef.current,
+        elapsedSec: Math.max(0, elapsedRef.current),
+        gain: gainRef.current,
+        loss: lossRef.current,
+        maxSpeed: maxSpeedRef.current,
+        currentSpeed: last?.spd ?? 0,
+        calories: estimateCalories(sportKey, distanceRef.current, movingRef.current, weightKg),
+        points: track.length,
+        accuracy,
+        altitude: last?.alt ?? null,
+      });
+      setRoute(track.map((p) => [p.lng, p.lat] as [number, number]));
+    }, 500);
+    return () => window.clearInterval(timer);
+  }, [accuracy, sportKey, weightKg]);
+
+  useEffect(() => {
+    if (stats.currentSpeed > stats.maxSpeed) maxSpeedRef.current = stats.currentSpeed;
+  }, [stats.currentSpeed, stats.maxSpeed]);
+
+  useEffect(() => {
+    startGps();
+    return () => {
+      stopGps();
+      void releaseWakeLock();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function handleStart() {
+    startedAtRef.current = Date.now();
+    pausedAtRef.current = null;
+    phaseRef.current = "recording";
+    setPhase("recording");
+    await requestWakeLock();
+  }
+
+  function pause(manual: boolean) {
+    if (phaseRef.current !== "recording") return;
+    pausedAtRef.current = Date.now();
+    phaseRef.current = "paused";
+    setPhase("paused");
+    setAutoPaused(!manual);
+    if (manual) pausesRef.current += 1;
+  }
+
+  function resume() {
+    if (phaseRef.current !== "paused") return;
+    const now = Date.now();
+    elapsedRef.current += pausedAtRef.current ? (now - pausedAtRef.current) / 1000 : 0;
+    pausedAtRef.current = null;
+    stillSinceRef.current = null;
+    phaseRef.current = "recording";
+    setPhase("recording");
+    setAutoPaused(false);
+  }
+
+  async function finish() {
+    const track = pointsRef.current;
+    if (track.length < 3 && !manualDistance && distanceRef.current < 50) {
+      setToast("Atividade muito curta — continue se movendo ou informe a distância no modo indoor.");
+      return;
+    }
+    setPhase("saving");
+    stopGps();
+    await releaseWakeLock();
+    const elapsedSec = Math.round(
+      Math.max(1, elapsedRef.current + (pausedAtRef.current ? (Date.now() - pausedAtRef.current) / 1000 : 0)),
+    );
+    const movingSec = Math.max(1, Math.round(movingRef.current));
+    const distanceM = manualDistance ? Number(manualDistance) * 1000 : Math.round(distanceRef.current);
+    const payload = {
+      sport: sportKey,
+      name: null,
+      startedAt: new Date(startedAtRef.current ?? Date.now()).toISOString(),
+      elapsedSec,
+      movingSec,
+      distanceM,
+      maxSpeedKmh: Number(maxSpeedRef.current.toFixed(2)),
+      elevGainM: Math.round(gainRef.current),
+      elevLossM: Math.round(lossRef.current),
+      calories: estimateCalories(sportKey, distanceM, movingSec, weightKg),
+      pauses: pausesRef.current,
+      autoPauses: autoPausesRef.current,
+      gpsPoints: track.length,
+      avgAccuracyM: track.length ? track.reduce((s, p) => s + (p.acc ?? 0), 0) / track.length : 0,
+      device: deviceName,
+      track,
+    };
+    try {
+      const res = await fetch("/api/activities", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const json = (await res.json()) as { ok: boolean; id?: number; error?: string };
+      if (!res.ok || !json.ok || !json.id) throw new Error(json.error ?? "Falha ao salvar");
+      router.push(`/app/activities/${json.id}/save`);
+    } catch (error) {
+      setPhase("error");
+      setToast(error instanceof Error ? error.message : "Erro ao salvar atividade");
+    }
+  }
+
+  const primaryMetric =
+    sport.category === "ride"
+      ? { value: formatDistance(stats.distanceM), label: "Distância" }
+      : { value: formatDistance(stats.distanceM), label: "Distância" };
+
+  const bigNumber =
+    sport.category === "ride"
+      ? { value: formatSpeed(stats.currentSpeed, 1), unit: "km/h", label: "Velocidade atual" }
+      : { value: formatPace(stats.distanceM > 30 ? stats.movingSec / (stats.distanceM / 1000) : 0), unit: "/km", label: "Pace atual" };
+
+  return (
+    <div className="flex flex-col gap-3 pb-6">
+      <div className="flex items-center justify-between gap-3 border-b border-line pb-3">
+        <Link href="/app/record" className="grid size-10 place-items-center border border-line text-muted transition-colors hover:border-paper hover:text-paper" aria-label="Voltar">
+          <Icon.back className="size-4" />
+        </Link>
+        <div className="flex items-center gap-2.5">
+          <SportIcon sport={sportKey} className="size-6 text-lime" />
+          <div>
+            <p className="display-2 text-[14px]">{sport.label}</p>
+            <p className="flex items-center gap-1.5 text-[10px] font-display font-bold uppercase tracking-[0.14em]" style={{ color: gpsQuality.tone }}>
+              <span className="inline-block size-1.5 rounded-full" style={{ background: gpsQuality.tone }} />
+              {gpsQuality.label}
+              {accuracy ? ` · ${Math.round(accuracy)}m` : ""}
+            </p>
+          </div>
+        </div>
+        <div className="metric flex size-10 flex-col items-center justify-center border border-line text-[11px] font-bold leading-none">
+          {stats.points}
+          <span className="mt-0.5 text-[8px] font-semibold text-muted">PTS</span>
+        </div>
+      </div>
+
+      {sport.outdoor ? (
+        <div className="relative h-56 border border-line">
+          <MapCanvas
+            className="absolute inset-0"
+            lines={[{ coords: route, color: sport.color, width: 6 }]}
+            userPos={userPos}
+            accuracyM={accuracy}
+            follow={follow}
+            onInteract={() => setFollow(false)}
+          />
+        </div>
+      ) : (
+        <div className="grid h-56 place-items-center border border-line bg-graphite-2 text-center text-[13px] text-muted">
+          <div>
+            <SportIcon sport={sportKey} className="mx-auto size-10 text-muted" />
+            <p className="mt-3 font-display text-[13px] font-bold uppercase tracking-[0.14em] text-paper">Modo indoor</p>
+            <p className="mx-auto mt-2 max-w-[240px] text-[11px] leading-relaxed">
+              Tempo e calorias registrados pelo cronômetro. Informe a distância ao finalizar.
+            </p>
+            <input
+              value={manualDistance}
+              onChange={(e) => setManualDistance(e.target.value.replace(",", "."))}
+              inputMode="decimal"
+              placeholder="Distância em km"
+              className="metric mt-3 w-40 border border-line bg-ink px-3 py-2 text-center text-[16px] font-bold"
+            />
+          </div>
+        </div>
+      )}
+
+      <div className="border border-line bg-graphite px-5 py-6 text-center">
+        <p className="text-[9px] font-display font-bold uppercase tracking-[0.2em] text-muted">{primaryMetric.label}</p>
+        <p className="metric mt-2 text-[64px] font-black leading-[0.9]" style={{ color: sport.color }}>
+          {primaryMetric.value}
+        </p>
+        <div className="mx-auto mt-4 flex items-baseline justify-center gap-1.5 border-t border-line pt-4">
+          <p className="metric text-[30px] font-black leading-none">{bigNumber.value}</p>
+          <span className="metric text-[12px] font-bold text-muted">{bigNumber.unit}</span>
+        </div>
+        <p className="mt-1.5 text-[9px] font-display font-bold uppercase tracking-[0.2em] text-muted">{bigNumber.label}</p>
+      </div>
+
+      <div className="grid grid-cols-2 gap-px border border-line bg-line">
+        <Metric label="Tempo total" value={formatDuration(stats.elapsedSec, true)} />
+        <Metric label="Em movimento" value={formatDuration(stats.movingSec, true)} />
+        <Metric label="Altitude" value={stats.altitude !== null ? `${Math.round(stats.altitude)} m` : "—"} />
+        <Metric label="Ganho acumulado" value={`${Math.round(stats.gain)} m`} accent="#d5ff45" />
+        <Metric label="Vel. máxima" value={`${formatSpeed(stats.maxSpeed)} km/h`} />
+        <Metric label="Vel. média" value={`${formatSpeed(stats.movingSec > 0 ? stats.distanceM / 1000 / (stats.movingSec / 3600) : 0)} km/h`} />
+        <Metric label="Calorias" value={`${stats.calories} kcal`} accent="#ff6a3d" />
+        <Metric label="Precisão GPS" value={`${Math.round(stats.accuracy)} m`} />
+      </div>
+
+      {gpsError ? <p className="border border-flame/40 bg-flame/10 px-4 py-3 text-[12px] text-flame">{gpsError}</p> : null}
+      {autoPaused && phase === "paused" ? (
+        <p className="border border-sky/40 bg-sky/10 px-4 py-3 text-[12px] text-sky">
+          Pausa automática — retomando quando você voltar a se mover.
+        </p>
+      ) : null}
+      {toast ? <p className="border border-line bg-graphite px-4 py-3 text-[12px] text-muted">{toast}</p> : null}
+
+      <div className="sticky bottom-20 z-10 mt-2 border-t border-line bg-ink/95 pt-3 backdrop-blur-md">
+        {phase === "ready" ? (
+          <button type="button" onClick={handleStart} className="btn btn-primary w-full py-4 text-[14px]">
+            Iniciar {sport.label.toLowerCase()}
+          </button>
+        ) : null}
+        {phase === "recording" ? (
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => pause(true)}
+              className="btn btn-dark flex-1 py-4 text-[13px]"
+            >
+              <Icon.pause className="size-4" /> Pausar
+            </button>
+            <button type="button" onClick={finish} className="btn flex-1 bg-flame py-4 text-[13px] text-ink hover:bg-[#ff7d55]">
+              Finalizar
+            </button>
+          </div>
+        ) : null}
+        {phase === "paused" ? (
+          <div className="flex gap-2">
+            <button type="button" onClick={resume} className="btn btn-primary flex-1 py-4 text-[13px]">
+              <Icon.play className="size-4" /> Continuar
+            </button>
+            <button type="button" onClick={finish} className="btn flex-1 bg-flame py-4 text-[13px] text-ink hover:bg-[#ff7d55]">
+              Finalizar
+            </button>
+          </div>
+        ) : null}
+        {phase === "saving" ? <p className="py-4 text-center text-[13px] text-muted shimmer">Salvando atividade…</p> : null}
+        {phase === "error" ? (
+          <button type="button" onClick={finish} className="btn w-full bg-flame py-4 text-[13px] text-ink hover:bg-[#ff7d55]">
+            Tentar salvar novamente
+          </button>
+        ) : null}
+      </div>
+
+      <p className="px-1 pb-2 text-[11px] leading-relaxed text-muted">
+        O trajeto é capturado pelo GPS real do dispositivo. Nenhum ponto é simulado: cada amostra guarda latitude, longitude,
+        precisão, altitude e velocidade — e pontos com precisão acima de 60 m são descartados automaticamente.
+      </p>
+    </div>
+  );
+}
+
+function Metric({ label, value, accent }: { label: string; value: string; accent?: string }) {
+  return (
+    <div className=" bg-surface px-3 py-2 hairline">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">{label}</p>
+      <p className="tabular text-lg font-bold" style={accent ? { color: accent } : undefined}>
+        {value}
+      </p>
+    </div>
+  );
+}
