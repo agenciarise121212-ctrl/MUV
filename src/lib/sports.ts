@@ -1,492 +1,65 @@
-/**
- * Configuração central das modalidades esportivas.
- * Cada modalidade define seus próprios campos, métricas e fórmulas.
- */
+export type SportGroup = "corrida" | "caminhada" | "ciclismo" | "outros";
+export type ExtraField = { key: string; label: string; type: "number" | "text" | "select"; options?: string[]; unit?: string };
 
-export type SportCategory = "run" | "walk" | "ride" | "other";
-
-export type SportMetric =
-  | "distance"
-  | "elapsed"
-  | "moving"
-  | "pace"
-  | "speed"
-  | "maxSpeed"
-  | "elevGain"
-  | "altitude"
-  | "calories"
-  | "cadence"
-  | "splits";
-
-export type SportDef = {
+export type Sport = {
   key: string;
   label: string;
-  short: string;
-  emoji: string;
-  category: SportCategory;
-  color: string;
-  /** Modalidade já disponível para gravação real. */
-  available: boolean;
-  outdoor: boolean;
-  /** Usa pace (min/km) em vez de velocidade como métrica principal. */
-  usesPace: boolean;
-  /** Permite pausa automática (sensor de velocidade parado). */
-  supportsAutoPause: boolean;
-  /** Limiar de velocidade (km/h) abaixo do qual considera-se parado. */
-  stopThresholdKmh: number;
-  /** Limiar de velocidade máxima plausível (km/h) para descartar ruído de GPS. */
-  plausibleMaxKmh: number;
-  /** Equivalente metabólico base usado na estimativa de calorias. */
-  metBase: number;
-  metrics: SportMetric[];
-  description: string;
+  group: SportGroup;
+  icon: string;
+  met: number; // equivalente metabólico p/ calorias
+  display: "pace" | "speed" | "time"; // métrica principal
+  gps: boolean;
+  autoPauseSpeed?: number; // m/s abaixo = pausa automática
+  enabled: boolean; // modalidades futuras ficam preparadas mas desabilitadas
+  extraFields?: ExtraField[];
 };
 
-const RUN_METRICS: SportMetric[] = ["distance", "elapsed", "moving", "pace", "elevGain", "altitude", "calories", "splits"];
-const WALK_METRICS: SportMetric[] = ["distance", "elapsed", "moving", "pace", "elevGain", "altitude", "calories", "splits"];
-const RIDE_METRICS: SportMetric[] = [
-  "distance",
-  "elapsed",
-  "moving",
-  "speed",
-  "maxSpeed",
-  "elevGain",
-  "altitude",
-  "calories",
-  "splits",
+const bikeFields: ExtraField[] = [
+  { key: "bike", label: "Bicicleta", type: "text" },
+  { key: "cadence", label: "Cadência média", type: "number", unit: "rpm" },
+  { key: "power", label: "Potência média", type: "number", unit: "W" },
+];
+const runFields: ExtraField[] = [
+  { key: "shoes", label: "Tênis", type: "text" },
+  { key: "effort", label: "Esforço percebido", type: "select", options: ["Leve", "Moderado", "Forte", "Máximo"] },
+];
+const trailFields: ExtraField[] = [
+  { key: "terrain", label: "Terreno", type: "select", options: ["Terra", "Pedras", "Lama", "Misto", "Areia"] },
+  { key: "difficulty", label: "Dificuldade", type: "select", options: ["Fácil", "Moderada", "Difícil", "Extrema"] },
 ];
 
-export const SPORTS: Record<string, SportDef> = {
-  run: {
-    key: "run",
-    label: "Corrida",
-    short: "Corrida",
-    emoji: "🏃",
-    category: "run",
-    color: "#c9ff4b",
-    available: true,
-    outdoor: true,
-    usesPace: true,
-    supportsAutoPause: true,
-    stopThresholdKmh: 3,
-    plausibleMaxKmh: 34,
-    metBase: 9.8,
-    metrics: RUN_METRICS,
-    description: "Corrida outdoor com GPS, pace ao vivo e splits por quilômetro.",
-  },
-  run_street: {
-    key: "run_street",
-    label: "Corrida de rua",
-    short: "Rua",
-    emoji: "🛣️",
-    category: "run",
-    color: "#c9ff4b",
-    available: true,
-    outdoor: true,
-    usesPace: true,
-    supportsAutoPause: true,
-    stopThresholdKmh: 3,
-    plausibleMaxKmh: 34,
-    metBase: 10,
-    metrics: RUN_METRICS,
-    description: "Treino e prova de rua, com ritmo alvo e splits.",
-  },
-  run_trail: {
-    key: "run_trail",
-    label: "Trail running",
-    short: "Trail",
-    emoji: "⛰️",
-    category: "run",
-    color: "#8ce99a",
-    available: true,
-    outdoor: true,
-    usesPace: true,
-    supportsAutoPause: true,
-    stopThresholdKmh: 2.5,
-    plausibleMaxKmh: 28,
-    metBase: 11,
-    metrics: RUN_METRICS,
-    description: "Trilha com foco em elevação acumulada e altimetria.",
-  },
-  run_indoor: {
-    key: "run_indoor",
-    label: "Corrida indoor",
-    short: "Indoor",
-    emoji: "🏠",
-    category: "run",
-    color: "#59b7ff",
-    available: true,
-    outdoor: false,
-    usesPace: true,
-    supportsAutoPause: false,
-    stopThresholdKmh: 0,
-    plausibleMaxKmh: 34,
-    metBase: 9.5,
-    metrics: ["distance", "elapsed", "moving", "pace", "calories"],
-    description: "Esteira ou trackttor: tempo, ritmo e calorias sem GPS.",
-  },
-  walk: {
-    key: "walk",
-    label: "Caminhada",
-    short: "Caminhada",
-    emoji: "🚶",
-    category: "walk",
-    color: "#59b7ff",
-    available: true,
-    outdoor: true,
-    usesPace: true,
-    supportsAutoPause: true,
-    stopThresholdKmh: 2,
-    plausibleMaxKmh: 12,
-    metBase: 4.3,
-    metrics: WALK_METRICS,
-    description: "Caminhada outdoor leve, com histórico de pontos e calorias.",
-  },
-  walk_rec: {
-    key: "walk_rec",
-    label: "Caminhada recreativa",
-    short: "Recreativa",
-    emoji: "🌳",
-    category: "walk",
-    color: "#59b7ff",
-    available: true,
-    outdoor: true,
-    usesPace: true,
-    supportsAutoPause: true,
-    stopThresholdKmh: 1.8,
-    plausibleMaxKmh: 12,
-    metBase: 3.8,
-    metrics: WALK_METRICS,
-    description: "Passeio, pet e caminhadas de lazer no parque.",
-  },
-  walk_long: {
-    key: "walk_long",
-    label: "Caminhada longa distância",
-    short: "Longa",
-    emoji: "🧭",
-    category: "walk",
-    color: "#59b7ff",
-    available: true,
-    outdoor: true,
-    usesPace: true,
-    supportsAutoPause: true,
-    stopThresholdKmh: 2,
-    plausibleMaxKmh: 12,
-    metBase: 4.5,
-    metrics: WALK_METRICS,
-    description: "Caminhadas de longa distância, peregrinação e ultradistance.",
-  },
-  hike: {
-    key: "hike",
-    label: "Trilha / Hiking",
-    short: "Trilha",
-    emoji: "🥾",
-    category: "walk",
-    color: "#8ce99a",
-    available: true,
-    outdoor: true,
-    usesPace: true,
-    supportsAutoPause: true,
-    stopThresholdKmh: 1.8,
-    plausibleMaxKmh: 14,
-    metBase: 6,
-    metrics: WALK_METRICS,
-    description: "Trilhas com altimetria, ganho acumulado e desafios de montanha.",
-  },
-  ride: {
-    key: "ride",
-    label: "Pedal de estrada",
-    short: "Estrada",
-    emoji: "🚴",
-    category: "ride",
-    color: "#ff7a3d",
-    available: true,
-    outdoor: true,
-    usesPace: false,
-    supportsAutoPause: true,
-    stopThresholdKmh: 3.5,
-    plausibleMaxKmh: 110,
-    metBase: 8,
-    metrics: RIDE_METRICS,
-    description: "Pedal de estrada com velocidade média, máxima e altimetria.",
-  },
-  mtb: {
-    key: "mtb",
-    label: "Mountain bike",
-    short: "MTB",
-    emoji: "🚵",
-    category: "ride",
-    color: "#ff7a3d",
-    available: true,
-    outdoor: true,
-    usesPace: false,
-    supportsAutoPause: true,
-    stopThresholdKmh: 3,
-    plausibleMaxKmh: 80,
-    metBase: 8.5,
-    metrics: RIDE_METRICS,
-    description: "MTB com ganho acumulado,Single track e recordes de subida.",
-  },
-  ride_urban: {
-    key: "ride_urban",
-    label: "Ciclismo urbano",
-    short: "Urbano",
-    emoji: "🚲",
-    category: "ride",
-    color: "#ff7a3d",
-    available: true,
-    outdoor: true,
-    usesPace: false,
-    supportsAutoPause: true,
-    stopThresholdKmh: 3,
-    plausibleMaxKmh: 70,
-    metBase: 7,
-    metrics: RIDE_METRICS,
-    description: "Pedal urbano e bicicleta como transporte, com pausa automática.",
-  },
-  gravel: {
-    key: "gravel",
-    label: "Gravel",
-    short: "Gravel",
-    emoji: "🪨",
-    category: "ride",
-    color: "#ffa94d",
-    available: true,
-    outdoor: true,
-    usesPace: false,
-    supportsAutoPause: true,
-    stopThresholdKmh: 3,
-    plausibleMaxKmh: 90,
-    metBase: 8.2,
-    metrics: RIDE_METRICS,
-    description: "Gravel, estradas de terra e longas distâncias off-road.",
-  },
-  ebike: {
-    key: "ebike",
-    label: "Bicicleta elétrica",
-    short: "e-Bike",
-    emoji: "⚡",
-    category: "ride",
-    color: "#ffd43b",
-    available: true,
-    outdoor: true,
-    usesPace: false,
-    supportsAutoPause: true,
-    stopThresholdKmh: 3.5,
-    plausibleMaxKmh: 60,
-    metBase: 5.5,
-    metrics: RIDE_METRICS,
-    description: "e-Bike com estimativa de calorias ajustada ao suporte elétrico.",
-  },
-  ride_indoor: {
-    key: "ride_indoor",
-    label: "Pedal indoor",
-    short: "Indoor",
-    emoji: "🌀",
-    category: "ride",
-    color: "#59b7ff",
-    available: true,
-    outdoor: false,
-    usesPace: false,
-    supportsAutoPause: false,
-    stopThresholdKmh: 0,
-    plausibleMaxKmh: 80,
-    metBase: 7.5,
-    metrics: ["distance", "elapsed", "moving", "speed", "maxSpeed", "calories"],
-    description: "Rolo ou indoor bike: tempo em movimento e velocidade simulada pelo sensor.",
-  },
-};
-
-/** Arquitetura pronta para as próximas modalidades. */
-export const UPCOMING_SPORTS: SportDef[] = [
-  {
-    key: "gym",
-    label: "Academia",
-    short: "Academia",
-    emoji: "🏋️",
-    category: "other",
-    color: "#b197fc",
-    available: false,
-    outdoor: false,
-    usesPace: false,
-    supportsAutoPause: false,
-    stopThresholdKmh: 0,
-    plausibleMaxKmh: 0,
-    metBase: 5,
-    metrics: ["elapsed", "calories"],
-    description: "Séries, cargas e volume total por sessão.",
-  },
-  {
-    key: "strength",
-    label: "Musculação",
-    short: "Musculação",
-    emoji: "💪",
-    category: "other",
-    color: "#b197fc",
-    available: false,
-    outdoor: false,
-    usesPace: false,
-    supportsAutoPause: false,
-    stopThresholdKmh: 0,
-    plausibleMaxKmh: 0,
-    metBase: 5.5,
-    metrics: ["elapsed", "calories"],
-    description: "Grupos musculares, tonelagem e PRs por exercício.",
-  },
-  {
-    key: "functional",
-    label: "Treino funcional",
-    short: "Funcional",
-    emoji: "🤸",
-    category: "other",
-    color: "#b197fc",
-    available: false,
-    outdoor: false,
-    usesPace: false,
-    supportsAutoPause: false,
-    stopThresholdKmh: 0,
-    plausibleMaxKmh: 0,
-    metBase: 6.5,
-    metrics: ["elapsed", "calories"],
-    description: "Circuitos, AMRAP e calorias por bloco.",
-  },
-  {
-    key: "swim",
-    label: "Natação",
-    short: "Natação",
-    emoji: "🏊",
-    category: "other",
-    color: "#4dabf7",
-    available: false,
-    outdoor: false,
-    usesPace: false,
-    supportsAutoPause: false,
-    stopThresholdKmh: 0,
-    plausibleMaxKmh: 0,
-    metBase: 8.3,
-    metrics: ["distance", "elapsed", "pace", "calories"],
-    description: "Comprimentos, braçadas e swolf por piscina.",
-  },
-  {
-    key: "soccer",
-    label: "Futebol",
-    short: "Futebol",
-    emoji: "⚽",
-    category: "other",
-    color: "#69db7c",
-    available: false,
-    outdoor: true,
-    usesPace: false,
-    supportsAutoPause: false,
-    stopThresholdKmh: 0,
-    plausibleMaxKmh: 0,
-    metBase: 7,
-    metrics: ["elapsed", "distance", "calories"],
-    description: "Distância percorrida em campo e sprints.",
-  },
-  {
-    key: "skate",
-    label: "Skate",
-    short: "Skate",
-    emoji: "🛹",
-    category: "other",
-    color: "#ffa8a8",
-    available: false,
-    outdoor: true,
-    usesPace: false,
-    supportsAutoPause: false,
-    stopThresholdKmh: 0,
-    plausibleMaxKmh: 0,
-    metBase: 5,
-    metrics: ["elapsed", "distance", "calories"],
-    description: "Sessões, manobras e distância.",
-  },
-  {
-    key: "skating",
-    label: "Patins",
-    short: "Patins",
-    emoji: "⛸️",
-    category: "other",
-    color: "#74c0fc",
-    available: false,
-    outdoor: true,
-    usesPace: false,
-    supportsAutoPause: false,
-    stopThresholdKmh: 0,
-    plausibleMaxKmh: 0,
-    metBase: 7,
-    metrics: ["distance", "elapsed", "speed", "calories"],
-    description: "Distância, velocidade e trajeto GPS.",
-  },
-  {
-    key: "yoga",
-    label: "Yoga",
-    short: "Yoga",
-    emoji: "🧘",
-    category: "other",
-    color: "#63e6be",
-    available: false,
-    outdoor: false,
-    usesPace: false,
-    supportsAutoPause: false,
-    stopThresholdKmh: 0,
-    plausibleMaxKmh: 0,
-    metBase: 3,
-    metrics: ["elapsed", "calories"],
-    description: "Sessões, estilo e minutos de prática.",
-  },
+export const SPORTS: Sport[] = [
+  { key: "run", label: "Corrida outdoor", group: "corrida", icon: "🏃", met: 9.8, display: "pace", gps: true, autoPauseSpeed: 0.6, enabled: true, extraFields: runFields },
+  { key: "street_run", label: "Corrida de rua", group: "corrida", icon: "🏙️", met: 9.8, display: "pace", gps: true, autoPauseSpeed: 0.6, enabled: true, extraFields: runFields },
+  { key: "trail_run", label: "Trail running", group: "corrida", icon: "⛰️", met: 10.5, display: "pace", gps: true, autoPauseSpeed: 0.5, enabled: true, extraFields: [...runFields, ...trailFields] },
+  { key: "indoor_run", label: "Corrida indoor", group: "corrida", icon: "🏠", met: 9, display: "pace", gps: false, enabled: true, extraFields: [{ key: "incline", label: "Inclinação", type: "number", unit: "%" }, ...runFields] },
+  { key: "walk", label: "Caminhada outdoor", group: "caminhada", icon: "🚶", met: 3.8, display: "pace", gps: true, autoPauseSpeed: 0.3, enabled: true },
+  { key: "leisure_walk", label: "Caminhada recreativa", group: "caminhada", icon: "🌳", met: 3, display: "pace", gps: true, autoPauseSpeed: 0.3, enabled: true },
+  { key: "long_walk", label: "Caminhada longa distância", group: "caminhada", icon: "🎒", met: 4.5, display: "pace", gps: true, autoPauseSpeed: 0.3, enabled: true },
+  { key: "hike", label: "Trilha", group: "caminhada", icon: "🥾", met: 6, display: "pace", gps: true, autoPauseSpeed: 0.25, enabled: true, extraFields: trailFields },
+  { key: "road_bike", label: "Pedal de estrada", group: "ciclismo", icon: "🚴", met: 8, display: "speed", gps: true, autoPauseSpeed: 1.2, enabled: true, extraFields: bikeFields },
+  { key: "mtb", label: "Mountain bike", group: "ciclismo", icon: "🚵", met: 8.5, display: "speed", gps: true, autoPauseSpeed: 0.9, enabled: true, extraFields: [...bikeFields, ...trailFields] },
+  { key: "urban_bike", label: "Ciclismo urbano", group: "ciclismo", icon: "🚲", met: 6, display: "speed", gps: true, autoPauseSpeed: 1, enabled: true, extraFields: bikeFields },
+  { key: "gravel", label: "Gravel", group: "ciclismo", icon: "🛤️", met: 8, display: "speed", gps: true, autoPauseSpeed: 1, enabled: true, extraFields: bikeFields },
+  { key: "ebike", label: "Bicicleta elétrica", group: "ciclismo", icon: "⚡", met: 4.5, display: "speed", gps: true, autoPauseSpeed: 1.2, enabled: true, extraFields: [...bikeFields, { key: "assist", label: "Nível de assistência", type: "select", options: ["Eco", "Tour", "Sport", "Turbo"] }] },
+  // Arquitetura preparada para próximas modalidades
+  { key: "gym", label: "Academia", group: "outros", icon: "🏋️", met: 5, display: "time", gps: false, enabled: false },
+  { key: "weights", label: "Musculação", group: "outros", icon: "💪", met: 6, display: "time", gps: false, enabled: false },
+  { key: "functional", label: "Treino funcional", group: "outros", icon: "🤸", met: 8, display: "time", gps: false, enabled: false },
+  { key: "swim", label: "Natação", group: "outros", icon: "🏊", met: 7, display: "pace", gps: false, enabled: false },
+  { key: "soccer", label: "Futebol", group: "outros", icon: "⚽", met: 7, display: "time", gps: true, enabled: false },
+  { key: "skate", label: "Skate", group: "outros", icon: "🛹", met: 5, display: "speed", gps: true, enabled: false },
+  { key: "inline", label: "Patins", group: "outros", icon: "⛸️", met: 7.5, display: "speed", gps: true, enabled: false },
+  { key: "yoga", label: "Yoga", group: "outros", icon: "🧘", met: 2.5, display: "time", gps: false, enabled: false },
 ];
 
-export const SPORT_GROUPS: { key: SportCategory; label: string; emoji: string; sports: SportDef[] }[] = [
-  { key: "run", label: "Corrida", emoji: "🏃", sports: Object.values(SPORTS).filter((s) => s.category === "run") },
-  { key: "walk", label: "Caminhada e trilha", emoji: "🥾", sports: Object.values(SPORTS).filter((s) => s.category === "walk") },
-  { key: "ride", label: "Ciclismo e pedal", emoji: "🚴", sports: Object.values(SPORTS).filter((s) => s.category === "ride") },
+export const GROUPS: { key: SportGroup; label: string }[] = [
+  { key: "corrida", label: "Corrida" },
+  { key: "caminhada", label: "Caminhada" },
+  { key: "ciclismo", label: "Ciclismo" },
+  { key: "outros", label: "Em breve" },
 ];
 
-export function getSport(key: string | null | undefined): SportDef {
-  if (!key) return SPORTS.run;
-  return SPORTS[key] ?? SPORTS.run;
-}
-
-export function sportLabel(key: string | null | undefined): string {
-  return getSport(key).label;
-}
-
-export function isRideSport(key: string | null | undefined): boolean {
-  return getSport(key).category === "ride";
-}
-
-export function categoryLabel(category: SportCategory): string {
-  if (category === "ride") return "Ciclismo";
-  if (category === "run") return "Corrida";
-  if (category === "walk") return "Caminhada";
-  return "Outros";
-}
-
-/** Calorias estimadas: MET ajustado pela intensidade real do treino. */
-export function calcCalories(sportKey: string, distanceM: number, movingSec: number, weightKg = 72): number {
-  const sport = getSport(sportKey);
-  if (movingSec <= 0) return 0;
-  const hours = movingSec / 3600;
-  let met = sport.metBase;
-  if (sport.category === "run" || sport.category === "walk") {
-    const kmh = distanceM / 1000 / hours;
-    if (sport.category === "run") met = kmh > 0 ? 1.05 * kmh + 1.2 : sport.metBase;
-    else met = kmh > 0 ? 1.35 * kmh + 0.6 : sport.metBase;
-    met = Math.min(met, 26);
-  } else if (sport.category === "ride") {
-    const kmh = distanceM / 1000 / hours;
-    if (sport.key === "ebike") met = 3.5 + kmh * 0.16;
-    else met = 3.5 + kmh * 0.42;
-    met = Math.min(met, 18);
-  }
-  return Math.round(met * weightKg * hours);
-}
-
-export function defaultActivityName(sportKey: string): string {
-  const sport = getSport(sportKey);
-  const period = new Date().getHours();
-  if (period < 12) return `${sport.label} matinal`;
-  if (period < 18) return `${sport.label} de tarde`;
-  return `${sport.label} noturna`;
+export function getSport(key: string): Sport {
+  return SPORTS.find((s) => s.key === key) ?? SPORTS[0];
 }
