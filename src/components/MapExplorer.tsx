@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import MapCanvas, { type MapCircle, type MapLine } from "@/components/MapCanvas";
+import type { MapCircle, MapLine } from "@/components/MapCanvas";
+import MapView from "@/components/MapView";
 import { BottomSheet } from "@/components/BottomSheet";
 import { Icon } from "@/components/icons.client";
 import { formatDistance, formatDuration, formatSpeed } from "@/lib/format";
@@ -117,7 +118,7 @@ export function MapExplorer({ territories, segments }: { territories: MapTerrito
   return (
     <>
       <div className="fixed inset-x-0 top-0 bottom-0 mx-auto max-w-[480px]">
-        <MapCanvas
+        <MapView
           className="absolute inset-0"
           lines={lines}
           circles={circles}

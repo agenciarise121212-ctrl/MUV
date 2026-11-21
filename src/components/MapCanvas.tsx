@@ -21,7 +21,7 @@ export type MapEmblem = {
   dimmed?: boolean;
 };
 
-type Props = {
+export type MapCanvasProps = {
   lines?: MapLine[];
   circles?: MapCircle[];
   markers?: { center: [number, number]; color?: string; label?: string }[];
@@ -146,7 +146,13 @@ const TILES: Record<"dark" | "voyager", string> = {
   voyager: "https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
 };
 
+/**
+ * Centro padrão imediato: o mapa abre SEM esperar o GPS responder e depois
+ * centraliza suavemente quando a posição chega. Sem isso, o componente ficava
+ * parado em "Carregando mapa…" nos navegadores que demoram a fixar o sinal.
+ */
 const DEFAULT_CENTER: [number, number] = [-46.6333, -23.5505];
+export const DEFAULT_MAP_CENTER = DEFAULT_CENTER;
 
 function circlePolygon(center: [number, number], radiusM: number, steps = 72): [number, number][] {
   const [lng, lat] = center;
@@ -191,7 +197,7 @@ export default function MapCanvas({
   circlesClickable = false,
   onCircleClick,
   onEmblemClick,
-}: Props) {
+}: MapCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MlMap | null>(null);
   const followingRef = useRef(follow);

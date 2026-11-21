@@ -2,7 +2,6 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { AppShell } from "@/components/AppShell";
-import MapCanvas from "@/components/MapCanvas";
 import { PhotoGrid } from "@/components/Lightbox";
 import { RouteDiary, type GeoPhoto } from "@/components/RouteDiary";
 import { Card, Pill } from "@/components/ui";

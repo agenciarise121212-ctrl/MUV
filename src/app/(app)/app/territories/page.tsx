@@ -2,7 +2,7 @@ import { requireUser } from "@/lib/auth";
 import { AppShell } from "@/components/AppShell";
 import { Card, ProgressBar } from "@/components/ui";
 import { ClaimTerritoriesButton } from "@/components/actions";
-import MapCanvas from "@/components/MapCanvas";
+import MapView from "@/components/MapView";
 import { territoriesForUser } from "@/lib/data";
 import { formatDistance, formatNumber } from "@/lib/format";
 
@@ -47,8 +47,8 @@ export default async function TerritoriesPage() {
       </Card>
 
       <div className="mt-3 overflow-hidden rounded-2xl hairline">
-        <div className="relative h-[300px]">
-          <MapCanvas className="absolute inset-0" circles={circles} autoFit />
+        <div className="relative h-[300px] min-h-[300px] w-full">
+          <MapView className="absolute inset-0" circles={circles} autoFit />
         </div>
       </div>
 

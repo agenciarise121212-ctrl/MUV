@@ -234,7 +234,7 @@ async function main() {
   for (const [i, u] of USERS.entries()) {
     const res = await client.query(
       `insert into users (username, name, email, password_hash, bio, city, avatar_color, weight_kg, sex, auto_pause, xp, coins)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,true,0,120) returning id`,
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,false,0,120) returning id`,
       [u.username, u.name, u.email, hashPassword("muv1234"), u.bio, u.city, u.color, u.weight, u.sex],
     );
     userIds[u.username] = res.rows[0].id;

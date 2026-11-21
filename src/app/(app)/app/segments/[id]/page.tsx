@@ -7,7 +7,7 @@ import { requireUser } from "@/lib/auth";
 import { AppShell } from "@/components/AppShell";
 import { Card, Pill } from "@/components/ui";
 import { Avatar } from "@/components/Avatar";
-import MapCanvas from "@/components/MapCanvas";
+import MapView from "@/components/MapView";
 import { segmentLeaderboard } from "@/lib/data";
 import { formatDistance, formatDuration, formatSpeed } from "@/lib/format";
 import { getSport, isRideSport } from "@/lib/sports";
@@ -33,8 +33,8 @@ export default async function SegmentDetailPage({ params }: { params: Promise<{ 
   return (
     <AppShell user={user} title={segment.name} backHref="/app/segments">
       <div className="overflow-hidden rounded-2xl hairline">
-        <div className="relative h-[260px]">
-          <MapCanvas className="absolute inset-0" lines={[{ coords, color: sport.color, width: 6 }]} autoFit />
+        <div className="relative h-[260px] min-h-[260px] w-full">
+          <MapView className="absolute inset-0" lines={[{ coords, color: sport.color, width: 6 }]} autoFit />
         </div>
       </div>
 

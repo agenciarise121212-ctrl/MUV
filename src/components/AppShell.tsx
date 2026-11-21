@@ -156,6 +156,7 @@ const MENU = [
   { href: "/app/rewards", label: "Conquistas e recompensas", icon: "trophy" as const },
   { href: "/app/compare", label: "Comparar atividades", icon: "chart" as const },
   { href: "/app/territories", label: "Territórios", icon: "layers" as const },
+  { href: "/preview", label: "Simulador mobile", icon: "chart" as const },
 ];
 
 /** Menu de seções usado no Perfil. */

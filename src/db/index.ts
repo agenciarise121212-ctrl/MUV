@@ -1,10 +1,10 @@
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 
-const databaseUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL;
+const databaseUrl = process.env.DATABASE_URL;
 
 if (!databaseUrl) {
-  throw new Error("DATABASE_URL (ou POSTGRES_URL) não configurado.");
+  throw new Error("DATABASE_URL is required");
 }
 
 const globalForDb = globalThis as typeof globalThis & {

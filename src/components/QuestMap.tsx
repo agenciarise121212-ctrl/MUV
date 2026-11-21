@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import MapCanvas, { type MapCircle, type MapEmblem, type MapLine } from "@/components/MapCanvas";
+import type { MapCircle, MapEmblem, MapLine } from "@/components/MapCanvas";
+import MapView from "@/components/MapView";
 import { BottomSheet } from "@/components/BottomSheet";
 import { EmblemIcon } from "@/components/EmblemIcon";
 import { Icon } from "@/components/icons.client";
@@ -261,7 +262,7 @@ export function QuestMap({ initialQuests, territories, territoryLines, segmentLi
   return (
     <>
       <div className="fixed inset-x-0 top-0 bottom-0 mx-auto max-w-[480px] overflow-hidden">
-        <MapCanvas
+        <MapView
           className="absolute inset-0"
           emblems={allPoints}
           clusterEmblems

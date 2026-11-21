@@ -8,7 +8,7 @@ import { formatDuration, formatPace, formatSpeed, formatDistance } from "@/lib/f
 import { estimateCalories, haversine } from "@/lib/geo";
 import { getSport } from "@/lib/sports";
 import { limitFor, familyOf, FAMILY_LABEL } from "@/lib/anticheat";
-import MapCanvas from "./MapCanvas";
+import MapView from "@/components/MapView";
 import { Icon, SportIcon } from "@/components/icons.client";
 import {
   PocketMode,
@@ -38,6 +38,21 @@ type Snapshot = {
   altitude: number | null;
 };
 
+/* --------------------- Parâmetros da pausa automática --------------------- */
+
+/** Janela mínima de imobilidade antes de pausar. */
+const AUTO_PAUSE_WINDOW_SEC = 20;
+/** Deslocamento máximo acumulado na janela para considerar parado. */
+const AUTO_PAUSE_MIN_MOVE_M = 8;
+/** Deslocamento por amostra que já conta como movimento (interrompe a janela). */
+const AUTO_PAUSE_MAX_STEP_M = 3;
+/** Janela mínima de movimento antes de retomar. */
+const AUTO_PAUSE_RESUME_SEC = 2;
+/** Deslocamento acumulado mínimo para confirmar a retomada. */
+const AUTO_PAUSE_RESUME_MOVE_M = 6;
+/** Deslocamento por amostra que confirma movimento na retomada. */
+const AUTO_PAUSE_RESUME_STEP_M = 4;
+
 const EMPTY: Snapshot = {
   distanceM: 0,
   movingSec: 0,
@@ -55,12 +70,10 @@ const EMPTY: Snapshot = {
 export function RecordClient({
   sportKey,
   weightKg,
-  autoPauseEnabled,
   deviceName,
 }: {
   sportKey: string;
   weightKg: number;
-  autoPauseEnabled: boolean;
   deviceName: string;
 }) {
   const sport = getSport(sportKey);
@@ -87,8 +100,21 @@ export function RecordClient({
   const elevBaseRef = useRef<number | null>(null);
   const pausesRef = useRef(0);
   const autoPausesRef = useRef(0);
-  const stillSinceRef = useRef<number | null>(null);
-  const movingSinceRef = useRef<number | null>(null);
+  /**
+   * Detecção de parada por DESLOCAMENTO REAL, não por `coords.speed`.
+   *
+   * Navegadores mobile — especialmente o Safari no iOS — retornam `null` ou
+   * `0` em `coords.speed` durante caminhadas e corridas. O bug anterior usava
+   * `deviceSpeed ?? stepSpeed`, e como `??` só cai para o lado direito quando o
+   * valor é `null`/`undefined`, um `coords.speed === 0` fazia a velocidade
+   * ficar travada em 0: o app "pausava automaticamente" o tempo todo com o
+   * usuário em movimento contínuo.
+   *
+   * Agora somamos o deslocamento real entre pontos válidos de GPS. A pausa só
+   * dispara após 20 s consecutivos com menos de 8 m de deslocamento acumulado.
+   */
+  const stillWindowRef = useRef<{ start: number; moved: number } | null>(null);
+  const resumeWindowRef = useRef<{ start: number; moved: number } | null>(null);
   const watchRef = useRef<number | null>(null);
   const startedAtRef = useRef<number | null>(null);
   const pausedAtRef = useRef<number | null>(null);
@@ -99,6 +125,15 @@ export function RecordClient({
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [resumed, setResumed] = useState(false);
   const [pocket, setPocket] = useState(false);
+  /**
+   * Pausa automática: DESLIGADA por padrão.
+   *
+   * Antes este valor vinha do perfil do usuário (`autoPauseEnabled`), que
+   * nascia `true` no banco — por isso o app pausava sozinho sem ninguém pedir.
+   * Agora o padrão é sempre desligado e o usuário liga explicitamente a cada
+   * modalidade, com a escolha lembrada no dispositivo.
+   */
+  const [autoPauseOn, setAutoPauseOn] = useState(false);
 
   useEffect(() => {
     phaseRef.current = phase;
@@ -106,7 +141,23 @@ export function RecordClient({
 
   useEffect(() => {
     setSessionId(activeSessionKey());
+    try {
+      setAutoPauseOn(window.localStorage.getItem("muv-auto-pause") === "1");
+    } catch {
+      setAutoPauseOn(false);
+    }
   }, []);
+
+  function toggleAutoPause(next: boolean) {
+    setAutoPauseOn(next);
+    try {
+      window.localStorage.setItem("muv-auto-pause", next ? "1" : "0");
+    } catch {
+      /* sem storage: mantém apenas em memória */
+    }
+    // Se desligar durante uma pausa automática, retoma imediatamente.
+    if (!next && autoPaused) resume();
+  }
 
   // RECUPERAÇÃO AUTOMÁTICA: se o navegador recarregou no meio do percurso,
   // retomamos os pontos, a distância e o tempo de onde pararam.
@@ -162,14 +213,18 @@ export function RecordClient({
       const t = Date.now();
       const alt = typeof pos.coords.altitude === "number" ? pos.coords.altitude : null;
       const last = pointsRef.current.length > 0 ? pointsRef.current[pointsRef.current.length - 1] : null;
-      const deviceSpeed = typeof pos.coords.speed === "number" && pos.coords.speed >= 0 ? pos.coords.speed * 3.6 : null;
-      let stepSpeed = 0;
-      if (last) {
-        const d = haversine(last.lat, last.lng, pos.coords.latitude, pos.coords.longitude);
-        const dt = (t - last.t) / 1000;
-        stepSpeed = dt > 0.4 ? (d / dt) * 3.6 : 0;
-      }
-      const speed = deviceSpeed ?? stepSpeed;
+      // Deslocamento real desde o último ponto válido (sempre calculado).
+      const realDistance = last ? haversine(last.lat, last.lng, pos.coords.latitude, pos.coords.longitude) : 0;
+      const dt = last ? (t - last.t) / 1000 : 0;
+      // Velocidade derivada do deslocamento — a única fonte confiável.
+      const stepSpeed = last && dt > 0.4 ? (realDistance / dt) * 3.6 : 0;
+
+      // `coords.speed` é usado APENAS para reforçar movimento quando o GPS
+      // reporta algo útil e coerente. Se vier 0 ou null (Safari), ignoramos:
+      // o deslocamento real manda.
+      const deviceSpeedRaw = typeof pos.coords.speed === "number" && pos.coords.speed > 0 ? pos.coords.speed * 3.6 : null;
+      const speed = deviceSpeedRaw !== null && deviceSpeedRaw > stepSpeed ? deviceSpeedRaw : stepSpeed;
+
       if (speed > sport.plausibleMaxKmh) return; // ruído de GPS: ponto descartado
 
       if (alt !== null) {
@@ -198,37 +253,55 @@ export function RecordClient({
         spd: speed,
       });
 
-      // Pausa automática por baixa velocidade (ciclismo/corrida)
-      if (autoPauseEnabled && sport.supportsAutoPause) {
-        const now = t;
-        if (speed < sport.stopThresholdKmh) {
-          if (stillSinceRef.current === null) stillSinceRef.current = now;
-          if (now - stillSinceRef.current > 6000 && phaseRef.current === "recording") {
-            phaseRef.current = "paused";
-            pausedAtRef.current = now;
-            setPhase("paused");
-            setAutoPaused(true);
-            autoPausesRef.current += 1;
-          }
-        } else {
-          stillSinceRef.current = null;
-          if (phaseRef.current === "paused" && autoPaused && speed > sport.stopThresholdKmh + 1) {
-            if (movingSinceRef.current === null) movingSinceRef.current = now;
-            if (now - movingSinceRef.current > 1500) {
-              elapsedRef.current += pausedAtRef.current ? (now - pausedAtRef.current) / 1000 : 0;
-              pausedAtRef.current = null;
-              phaseRef.current = "recording";
-              setPhase("recording");
-              setAutoPaused(false);
-              movingSinceRef.current = null;
+      // PAUSA AUTOMÁTICA (opcional, desligada por padrão).
+      // Critério: deslocamento real acumulado menor que 8 m por 20 s seguidos.
+      // Nada aqui roda se o usuário não ativou a opção.
+      if (autoPauseOn && sport.supportsAutoPause) {
+        if (phaseRef.current === "recording") {
+          if (realDistance <= AUTO_PAUSE_MAX_STEP_M) {
+            const win = stillWindowRef.current;
+            if (!win || t - win.start > AUTO_PAUSE_WINDOW_SEC * 2) {
+              stillWindowRef.current = { start: t, moved: realDistance };
+            } else {
+              win.moved += realDistance;
+              // 20 s seguidos E menos de 8 m no total: parado de verdade.
+              if (t - win.start >= AUTO_PAUSE_WINDOW_SEC && win.moved < AUTO_PAUSE_MIN_MOVE_M) {
+                phaseRef.current = "paused";
+                pausedAtRef.current = t;
+                setPhase("paused");
+                setAutoPaused(true);
+                autoPausesRef.current += 1;
+                stillWindowRef.current = null;
+              }
             }
           } else {
-            movingSinceRef.current = null;
+            // Movimento real: zera a janela de parada imediatamente.
+            stillWindowRef.current = null;
+          }
+        } else if (phaseRef.current === "paused" && autoPaused) {
+          // Retomada também por deslocamento real, com janela de confirmação.
+          if (realDistance > AUTO_PAUSE_RESUME_STEP_M) {
+            const win = resumeWindowRef.current;
+            if (!win || t - win.start > AUTO_PAUSE_RESUME_SEC * 2) {
+              resumeWindowRef.current = { start: t, moved: realDistance };
+            } else {
+              win.moved += realDistance;
+              if (t - win.start >= AUTO_PAUSE_RESUME_SEC && win.moved >= AUTO_PAUSE_RESUME_MOVE_M) {
+                elapsedRef.current += pausedAtRef.current ? (t - pausedAtRef.current) / 1000 : 0;
+                pausedAtRef.current = null;
+                phaseRef.current = "recording";
+                setPhase("recording");
+                setAutoPaused(false);
+                resumeWindowRef.current = null;
+              }
+            }
+          } else {
+            resumeWindowRef.current = null;
           }
         }
       }
     },
-    [autoPaused, autoPauseEnabled, sport],
+    [autoPauseOn, sport],
   );
 
   const startGps = useCallback(() => {
@@ -321,6 +394,8 @@ export function RecordClient({
   async function handleStart() {
     startedAtRef.current = Date.now();
     pausedAtRef.current = null;
+    stillWindowRef.current = null;
+    resumeWindowRef.current = null;
     phaseRef.current = "recording";
     setPhase("recording");
   }
@@ -339,7 +414,8 @@ export function RecordClient({
     const now = Date.now();
     elapsedRef.current += pausedAtRef.current ? (now - pausedAtRef.current) / 1000 : 0;
     pausedAtRef.current = null;
-    stillSinceRef.current = null;
+    stillWindowRef.current = null;
+    resumeWindowRef.current = null;
     phaseRef.current = "recording";
     setPhase("recording");
     setAutoPaused(false);
@@ -526,9 +602,39 @@ export function RecordClient({
         </div>
       ) : null}
 
+      {/* Pausa automática: desligada por padrão, discreta e opcional */}
+      <button
+        type="button"
+        onClick={() => toggleAutoPause(!autoPauseOn)}
+        className="surface hover-lift flex w-full items-center gap-3 px-3.5 py-3 text-left"
+        aria-pressed={autoPauseOn}
+      >
+        <span className="min-w-0 flex-1">
+          <span className="block text-[12px] font-semibold">Pausa automática</span>
+          <span className="block text-[10px] leading-snug text-muted">
+            {autoPauseOn
+              ? "Ligada · pausa após 20 s parado e retoma ao voltar a se mover"
+              : "Desligada · o cronômetro continua mesmo se você parar"}
+          </span>
+        </span>
+        <span
+          className="relative flex h-[22px] w-[38px] shrink-0 items-center rounded-full transition-colors"
+          style={{ background: autoPauseOn ? "#d5ff45" : "#2a2d33" }}
+          aria-hidden="true"
+        >
+          <span
+            className="absolute size-[16px] rounded-full transition-all"
+            style={{
+              left: autoPauseOn ? 20 : 3,
+              background: autoPauseOn ? "#101112" : "#858b94",
+            }}
+          />
+        </span>
+      </button>
+
       {sport.outdoor ? (
-        <div className="relative h-56 border border-line">
-          <MapCanvas
+        <div className="relative h-56 min-h-[224px] w-full border border-line">
+          <MapView
             className="absolute inset-0"
             lines={[{ coords: route, color: sport.color, width: 6 }]}
             userPos={userPos}
@@ -582,7 +688,7 @@ export function RecordClient({
       {gpsError ? <p className="border border-flame/40 bg-flame/10 px-4 py-3 text-[12px] text-flame">{gpsError}</p> : null}
       {autoPaused && phase === "paused" ? (
         <p className="border border-sky/40 bg-sky/10 px-4 py-3 text-[12px] text-sky">
-          Pausa automática — retomando quando você voltar a se mover.
+          Pausa automática — você ficou parado 20 s. Retomando quando voltar a se mover.
         </p>
       ) : null}
       {toast ? <p className="border border-line bg-graphite px-4 py-3 text-[12px] text-muted">{toast}</p> : null}

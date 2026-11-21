@@ -46,7 +46,7 @@ export default async function RecordSportPage({ params }: { params: Promise<{ sp
 
   return (
     <AppShell user={user} title={def.label} backHref="/app/record" hideNav>
-      <RecordClient sportKey={def.key} weightKg={user.weightKg ?? 72} autoPauseEnabled={user.autoPause} deviceName={deviceName} />
+      <RecordClient sportKey={def.key} weightKg={user.weightKg ?? 72} deviceName={deviceName} />
       <Link href="/app/record" className="mt-2 block text-center text-xs font-semibold text-muted">
         Trocar modalidade
       </Link>

@@ -1,26 +1,73 @@
 "use client";
-import { useEffect, useRef, useState, type ReactNode } from "react";
 
-export default function BottomSheet({ open, onClose, title, children }: { open: boolean; onClose: () => void; title?: string; children: ReactNode }) {
-  const [drag, setDrag] = useState(0);
-  const start = useRef<number | null>(null);
-  useEffect(() => { if (!open) setDrag(0); }, [open]);
-  useEffect(() => { const k = (e: KeyboardEvent) => e.key === "Escape" && onClose(); window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, [onClose]);
+import { useEffect } from "react";
+
+/**
+ * Bottom sheet adaptado para mobile.
+ * Fecha por gesto no backdrop, no botão de fechar ou arrastando o grabber para baixo.
+ */
+export function BottomSheet({
+  open,
+  onClose,
+  title,
+  eyebrow,
+  children,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title?: string;
+  eyebrow?: string;
+  children: React.ReactNode;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  let startY = 0;
+
   return (
-    <div className={`fixed inset-0 mx-auto max-w-[480px] z-[900] ${open ? "" : "pointer-events-none"}`} aria-hidden={!open}>
-      <div onClick={onClose} className={`absolute inset-0 bg-black/55 transition-opacity duration-300 ${open ? "opacity-100" : "opacity-0"}`} />
-      <div role="dialog" aria-label={title}
-        className={`absolute bottom-0 inset-x-0 bg-graphite border-t border-line rounded-t-[22px] max-h-[85dvh] flex flex-col ${start.current == null ? "transition-transform duration-[400ms] ease-out-expo" : ""}`}
-        style={{ transform: open ? `translateY(${drag}px)` : "translateY(100%)", paddingBottom: "env(safe-area-inset-bottom)" }}>
-        <div className="pt-2.5 pb-1 touch-none cursor-grab"
-          onPointerDown={(e) => { start.current = e.clientY; (e.target as HTMLElement).setPointerCapture(e.pointerId); }}
-          onPointerMove={(e) => { if (start.current != null) setDrag(Math.max(0, e.clientY - start.current)); }}
-          onPointerUp={() => { const d = drag; start.current = null; if (d > 90) onClose(); else setDrag(0); }}>
-          <div className="mx-auto w-10 h-1 rounded-full bg-bone/25" />
-          {title && <div className="px-5 pt-3 pb-1 text-[15px] font-semibold">{title}</div>}
-        </div>
-        <div className="overflow-y-auto overscroll-contain px-5 pb-5">{children}</div>
+    <>
+      <div className="sheet-backdrop" onClick={onClose} />
+      <div
+        className="sheet"
+        role="dialog"
+        aria-modal="true"
+        onTouchStart={(e) => {
+          startY = e.touches[0]?.clientY ?? 0;
+        }}
+        onTouchEnd={(e) => {
+          const delta = (e.changedTouches[0]?.clientY ?? 0) - startY;
+          if (delta > 70) onClose();
+        }}
+      >
+        <div className="sheet-grabber" />
+        {title ? (
+          <div className="flex items-start justify-between gap-3 px-5 pt-2 pb-3">
+            <div className="min-w-0">
+              {eyebrow ? <p className="eyebrow mb-1">{eyebrow}</p> : null}
+              <h2 className="display-2 truncate text-[17px]">{title}</h2>
+            </div>
+            <button type="button" onClick={onClose} className="tap shrink-0" aria-label="Fechar">
+              <svg viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round">
+                <path d="M6.4 6.4l11.2 11.2M17.6 6.4 6.4 17.6" />
+              </svg>
+            </button>
+          </div>
+        ) : null}
+        <div className="px-5 pb-2">{children}</div>
       </div>
-    </div>
+    </>
   );
 }
